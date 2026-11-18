@@ -19,12 +19,18 @@ CREATE TABLE IF NOT EXISTS groups (
 );
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY,
-  username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  username TEXT NOT NULL UNIQUE COLLATE NOCASE,  -- Login: E-Mail-Adresse (Admin: "admin")
   display_name TEXT NOT NULL,
   password_hash TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'user',
   group_id INTEGER REFERENCES groups(id) ON DELETE SET NULL,
   created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS tokens (
+  hash TEXT PRIMARY KEY,         -- sha256 des Tokens aus dem Mail-Link
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  purpose TEXT NOT NULL,         -- verify | reset
+  expires_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sessions (
   token TEXT PRIMARY KEY,
@@ -108,6 +114,17 @@ CREATE TABLE IF NOT EXISTS answers (
   PRIMARY KEY (round_id, group_id, idx)
 );
 `);
+
+// Spalten nachträglich ergänzen, damit bestehende Datenbanken weiter funktionieren
+function addColumn(table, column, definition) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+  if (!cols.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+addColumn('users', 'verified', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('groups', 'created_by', 'INTEGER');
+addColumn('photos', 'thumb', 'TEXT');
+addColumn('challenges', 'thumb', 'TEXT');
+db.exec("UPDATE users SET verified = 1 WHERE role = 'admin'");
 
 const num = (v) => (typeof v === 'bigint' ? Number(v) : v);
 

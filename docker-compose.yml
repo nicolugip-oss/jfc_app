@@ -1,0 +1,16 @@
+# Start:   docker compose up -d --build
+# Logs:    docker compose logs -f
+# Update:  git pull && docker compose up -d --build
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      # Nur lokal erreichbar – davor gehört ein Reverse-Proxy mit HTTPS (siehe README).
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - jfc-data:/data
+
+volumes:
+  jfc-data:

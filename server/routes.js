@@ -1,4 +1,4 @@
-// REST-API für Login, Smallgroups, Challenges, Punkte und Admin-Funktionen
+// REST-API für Login, Smallgroups, Challenges, Galerie, Punkte und Admin-Funktionen
 import express from 'express';
 import multer from 'multer';
 import crypto from 'node:crypto';
@@ -7,12 +7,17 @@ import path from 'node:path';
 import { one, all, run, tx, UPLOAD_DIR, getSetting, setSetting } from './db.js';
 import {
   HttpError, hashPassword, verifyPassword, createSession, destroySession,
-  requireUser, requireAdmin, loginRateLimit,
+  requireUser, requireAdmin, createToken, consumeToken, limit,
 } from './auth.js';
+import { verifyMail, resetMail, mailConfigured } from './mail.js';
 import { DEFAULT_CATEGORIES, DEFAULT_LETTERS } from './game.js';
 
 const bad = (m) => new HttpError(400, m);
 const now = () => Date.now();
+const MIN = 60_000;
+const VERIFY_TTL = 7 * 24 * 60 * MIN;
+const RESET_TTL = 2 * 60 * MIN;
+const verificationOn = () => process.env.EMAIL_VERIFICATION !== 'off';
 
 function text(v, { name, min = 1, max = 200 }) {
   const s = String(v ?? '').trim();
@@ -21,6 +26,18 @@ function text(v, { name, min = 1, max = 200 }) {
   return s;
 }
 const int = (v, def = 0) => (Number.isFinite(parseInt(v, 10)) ? parseInt(v, 10) : def);
+function email(v) {
+  const e = String(v ?? '').trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e) || e.length > 120) throw bad('Bitte eine gültige E-Mail-Adresse angeben');
+  return e;
+}
+function password(v) {
+  const pw = String(v || '');
+  if (pw.length < 8) throw bad('Passwort: mindestens 8 Zeichen');
+  if (pw.length > 200) throw bad('Passwort ist zu lang');
+  return pw;
+}
+const appUrl = (req) => (process.env.APP_URL || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
 
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 function newJoinCode() {
@@ -29,22 +46,23 @@ function newJoinCode() {
     if (!one('SELECT 1 FROM groups WHERE join_code = ?', code)) return code;
   }
 }
-function createGroup(name) {
+function createGroup(name, createdBy = null) {
   const n = text(name, { name: 'Smallgroup-Name', min: 2, max: 40 });
-  if (one('SELECT 1 FROM groups WHERE name = ?', n)) throw bad('Diesen Smallgroup-Namen gibt es schon – nimm einen anderen oder tritt mit dem Code bei');
-  return run('INSERT INTO groups (name, join_code, created_at) VALUES (?, ?, ?)', n, newJoinCode(), now()).id;
+  if (one('SELECT 1 FROM groups WHERE name = ?', n)) throw bad('Diesen Smallgroup-Namen gibt es schon – frag deine Smallgroup nach dem Einladungslink');
+  return run('INSERT INTO groups (name, join_code, created_by, created_at) VALUES (?, ?, ?, ?)', n, newJoinCode(), createdBy, now()).id;
 }
 function groupByCode(code) {
   const g = one('SELECT id FROM groups WHERE join_code = ?', String(code || '').trim().toUpperCase());
   if (!g) throw new HttpError(404, 'Diesen Smallgroup-Code gibt es nicht');
   return g.id;
 }
-function resolveGroup({ groupMode, groupName, groupCode }) {
-  if (groupMode === 'create') return createGroup(groupName);
+function resolveGroup({ groupMode, groupName, groupCode }, userId = null) {
+  if (groupMode === 'create') return createGroup(groupName, userId);
   if (groupMode === 'join') return groupByCode(groupCode);
   throw bad('Bitte eine Smallgroup erstellen oder beitreten');
 }
 
+// ---------- Uploads ----------
 const upload = multer({
   storage: multer.diskStorage({
     destination: UPLOAD_DIR,
@@ -53,16 +71,25 @@ const upload = multer({
       cb(null, crypto.randomBytes(16).toString('hex') + ext);
     },
   }),
-  limits: { fileSize: 15 * 1024 * 1024, files: 10 },
+  limits: { fileSize: 15 * 1024 * 1024, files: 20 },
   fileFilter: (_req, file, cb) => cb(null, /^image\//.test(file.mimetype)),
 });
 const removeFile = (f) => f && fs.rm(path.join(UPLOAD_DIR, path.basename(f)), { force: true }, () => {});
-const cleanupUploads = (req) => [...(req.files || []), ...(req.file ? [req.file] : [])].forEach((f) => removeFile(f.filename));
+const uploadedFiles = (req) => [
+  ...(Array.isArray(req.files) ? req.files : Object.values(req.files || {}).flat()),
+  ...(req.file ? [req.file] : []),
+];
+const cleanupUploads = (req) => uploadedFiles(req).forEach((f) => removeFile(f.filename));
 
+// ---------- Abfragen ----------
 function meData(u) {
-  const group = u.group_id ? one('SELECT id, name, join_code AS code FROM groups WHERE id = ?', u.group_id) : null;
-  if (group) group.members = all('SELECT id, display_name AS name FROM users WHERE group_id = ? ORDER BY display_name', group.id);
-  return { user: { id: u.id, username: u.username, name: u.display_name, role: u.role }, group };
+  const group = u.group_id ? one('SELECT id, name, join_code AS code, created_by FROM groups WHERE id = ?', u.group_id) : null;
+  if (group) {
+    group.members = all('SELECT id, display_name AS name FROM users WHERE group_id = ? ORDER BY display_name', group.id);
+    group.isCreator = group.created_by === u.id;
+    delete group.created_by;
+  }
+  return { user: { id: u.id, email: u.username, name: u.display_name, role: u.role }, group };
 }
 
 function leaderboard() {
@@ -76,6 +103,10 @@ function leaderboard() {
     GROUP BY g.id ORDER BY total DESC, g.name COLLATE NOCASE`);
 }
 
+const PHOTO_COLS = `p.id, '/uploads/' || p.file AS url, '/uploads/' || COALESCE(p.thumb, p.file) AS thumb, u.display_name AS by`;
+const photosOf = (submissionId) => all(`SELECT ${PHOTO_COLS}
+  FROM photos p LEFT JOIN users u ON u.id = p.user_id WHERE p.submission_id = ? ORDER BY p.id`, submissionId);
+
 function submissionsFor(where, ...params) {
   const subs = all(`SELECT s.id, s.challenge_id AS challengeId, c.title AS challengeTitle, c.points AS maxPoints,
       s.group_id AS groupId, g.name AS groupName, s.comment, s.points, s.updated_at AS updatedAt
@@ -85,14 +116,17 @@ function submissionsFor(where, ...params) {
   for (const s of subs) s.photos = photosOf(s.id);
   return subs;
 }
-const photosOf = (submissionId) => all(`SELECT p.id, '/uploads/' || p.file AS url, u.display_name AS by
-  FROM photos p LEFT JOIN users u ON u.id = p.user_id WHERE p.submission_id = ? ORDER BY p.id`, submissionId);
 
 function parseDeadline(v) {
   if (!v) return null;
   const t = new Date(v).getTime();
   if (!Number.isFinite(t)) throw bad('Ungültige Deadline');
   return t;
+}
+
+async function sendVerification(req, user) {
+  const token = createToken(user.id, 'verify', VERIFY_TTL);
+  await verifyMail(user.username, user.display_name, `${appUrl(req)}/bestaetigen/${token}`);
 }
 
 export function apiRouter({ io, game }) {
@@ -107,38 +141,110 @@ export function apiRouter({ io, game }) {
   r.get('/config', (req, res) => {
     res.json({
       registrationCode: !!process.env.REGISTRATION_CODE,
+      emailVerification: verificationOn(),
       leaderboardHidden: getSetting('leaderboardHidden', false),
       defaults: { categories: DEFAULT_CATEGORIES, letters: DEFAULT_LETTERS },
     });
   });
 
-  r.post('/register', (req, res) => {
+  // Einladungslink: Name der Smallgroup anzeigen
+  r.get('/invite/:code', (req, res) => {
+    limit(`invite:${req.ip}`, 300, 10 * MIN);
+    const g = one('SELECT name FROM groups WHERE join_code = ?', String(req.params.code || '').trim().toUpperCase());
+    if (!g) throw new HttpError(404, 'Dieser Einladungslink ist ungültig');
+    res.json({ name: g.name });
+  });
+
+  r.post('/register', async (req, res) => {
+    limit(`register:${req.ip}`, 300, 10 * MIN);
     const b = req.body || {};
     const code = process.env.REGISTRATION_CODE;
     if (code && String(b.regCode || '').trim().toLowerCase() !== code.trim().toLowerCase()) {
       throw new HttpError(403, 'Der Camp-Code stimmt nicht');
     }
     const name = text(b.displayName, { name: 'Name', min: 2, max: 40 });
-    const username = text(b.username, { name: 'Benutzername', min: 3, max: 30 }).toLowerCase();
-    if (!/^[a-z0-9._-]+$/.test(username)) throw bad('Benutzername: nur Buchstaben, Zahlen, . _ -');
-    const pw = String(b.password || '');
-    if (pw.length < 6) throw bad('Passwort: mindestens 6 Zeichen');
-    if (one('SELECT 1 FROM users WHERE username = ?', username)) throw bad('Dieser Benutzername ist schon vergeben');
+    const mail = email(b.email);
+    const pw = password(b.password);
+    const existing = one('SELECT verified FROM users WHERE username = ?', mail);
+    if (existing) {
+      throw Object.assign(new HttpError(409, existing.verified
+        ? 'Mit dieser E-Mail gibt es schon ein Konto – logge dich ein oder setze dein Passwort zurück.'
+        : 'Mit dieser E-Mail gibt es schon ein Konto, das noch nicht bestätigt ist.'), { code: existing.verified ? 'exists' : 'unverified' });
+    }
+    const verified = verificationOn() ? 0 : 1;
     const userId = tx(() => {
-      const groupId = resolveGroup(b);
-      return run(`INSERT INTO users (username, display_name, password_hash, group_id, created_at) VALUES (?, ?, ?, ?, ?)`,
-        username, name, hashPassword(pw), groupId, now()).id;
+      const id = run(`INSERT INTO users (username, display_name, password_hash, verified, created_at) VALUES (?, ?, ?, ?, ?)`,
+        mail, name, hashPassword(pw), verified, now()).id;
+      run('UPDATE users SET group_id = ? WHERE id = ?', resolveGroup(b, id), id);
+      return id;
     });
+    refresh('groups');
+    if (verified) {
+      createSession(req, res, userId);
+      return res.json({ ok: true, verify: false });
+    }
+    let mailError = false;
+    try {
+      await sendVerification(req, one('SELECT id, username, display_name FROM users WHERE id = ?', userId));
+    } catch (e) {
+      console.error('Mailversand fehlgeschlagen:', e.message);
+      mailError = true;
+    }
+    res.json({ ok: true, verify: true, email: mail, mailError });
+  });
+
+  r.post('/login', (req, res) => {
+    const login = String(req.body?.email || '').trim().toLowerCase();
+    limit(`login-ip:${req.ip}`, 600, MIN);
+    limit(`login:${login}`, 10, 10 * MIN, 'Zu viele Versuche für dieses Konto – warte 10 Minuten oder setze dein Passwort zurück.');
+    const u = one('SELECT id, password_hash, verified FROM users WHERE username = ?', login);
+    if (!u || !verifyPassword(String(req.body?.password || ''), u.password_hash)) throw new HttpError(401, 'E-Mail oder Passwort falsch');
+    if (!u.verified) {
+      throw Object.assign(new HttpError(403, 'Bitte bestätige zuerst deine E-Mail-Adresse (Link in der Mail).'), { code: 'unverified' });
+    }
+    createSession(req, res, u.id);
+    res.json({ ok: true });
+  });
+
+  r.post('/resend', async (req, res) => {
+    const mail = email(req.body?.email);
+    limit(`mail-ip:${req.ip}`, 200, 10 * MIN);
+    limit(`mail:${mail}`, 3, 15 * MIN, 'Wir haben dir gerade schon Mails geschickt – schau auch im Spam-Ordner nach und versuche es in 15 Minuten nochmals.');
+    const u = one('SELECT id, username, display_name, verified FROM users WHERE username = ?', mail);
+    if (u && !u.verified) await sendVerification(req, u);
+    res.json({ ok: true }); // absichtlich gleiche Antwort, egal ob das Konto existiert
+  });
+
+  r.post('/verify', (req, res) => {
+    limit(`token:${req.ip}`, 200, 10 * MIN);
+    const userId = consumeToken(String(req.body?.token || ''), 'verify');
+    if (!userId) throw bad('Dieser Bestätigungslink ist ungültig oder abgelaufen. Logge dich ein, um einen neuen zu bekommen.');
+    run('UPDATE users SET verified = 1 WHERE id = ?', userId);
     createSession(req, res, userId);
     refresh('groups');
     res.json({ ok: true });
   });
 
-  r.post('/login', loginRateLimit, (req, res) => {
-    const { username, password } = req.body || {};
-    const u = one('SELECT id, password_hash FROM users WHERE username = ?', String(username || '').trim().toLowerCase());
-    if (!u || !verifyPassword(String(password || ''), u.password_hash)) throw new HttpError(401, 'Benutzername oder Passwort falsch');
-    createSession(req, res, u.id);
+  r.post('/forgot', async (req, res) => {
+    const mail = email(req.body?.email);
+    limit(`mail-ip:${req.ip}`, 200, 10 * MIN);
+    limit(`mail:${mail}`, 3, 15 * MIN, 'Wir haben dir gerade schon Mails geschickt – schau auch im Spam-Ordner nach und versuche es in 15 Minuten nochmals.');
+    const u = one("SELECT id, username, display_name FROM users WHERE username = ? AND role = 'user'", mail);
+    if (u) {
+      const token = createToken(u.id, 'reset', RESET_TTL);
+      await resetMail(u.username, u.display_name, `${appUrl(req)}/passwort-neu/${token}`);
+    }
+    res.json({ ok: true });
+  });
+
+  r.post('/reset', (req, res) => {
+    limit(`token:${req.ip}`, 200, 10 * MIN);
+    const pw = password(req.body?.password);
+    const userId = consumeToken(String(req.body?.token || ''), 'reset');
+    if (!userId) throw bad('Dieser Link ist ungültig oder abgelaufen. Fordere einfach einen neuen an.');
+    run('UPDATE users SET password_hash = ?, verified = 1 WHERE id = ?', hashPassword(pw), userId);
+    run('DELETE FROM sessions WHERE user_id = ?', userId);
+    createSession(req, res, userId);
     res.json({ ok: true });
   });
 
@@ -148,12 +254,12 @@ export function apiRouter({ io, game }) {
   });
 
   // ---------- Eingeloggt ----------
-  r.get('/me', requireUser, (req, res) => res.json(meData(req.user)));
+  r.get('/me', (req, res) => res.json(req.user ? meData(req.user) : { user: null }));
 
   r.post('/me/group', requireUser, (req, res) => {
     if (req.user.role === 'admin') throw bad('Admins sind in keiner Smallgroup');
     const old = req.user.group_id;
-    const groupId = tx(() => resolveGroup(req.body || {}));
+    const groupId = tx(() => resolveGroup(req.body || {}, req.user.id));
     run('UPDATE users SET group_id = ? WHERE id = ?', groupId, req.user.id);
     moveSocketsToGroup(req.user.id, old, groupId);
     refresh('groups');
@@ -177,6 +283,7 @@ export function apiRouter({ io, game }) {
     const admin = req.user.role === 'admin';
     res.json(all(`SELECT c.id, c.title, c.description, c.points, c.deadline, c.published,
         CASE WHEN c.image IS NULL THEN NULL ELSE '/uploads/' || c.image END AS image,
+        CASE WHEN c.image IS NULL THEN NULL ELSE '/uploads/' || COALESCE(c.thumb, c.image) END AS thumb,
         s.points AS myPoints,
         (SELECT COUNT(*) FROM photos p WHERE p.submission_id = s.id) AS myPhotos,
         (SELECT COUNT(*) FROM submissions s2 WHERE s2.challenge_id = c.id AND s2.points IS NULL
@@ -201,21 +308,25 @@ export function apiRouter({ io, game }) {
     res.json({ challenge: c, mine, all: admin ? submissionsFor('s.challenge_id = ?', c.id) : undefined });
   });
 
-  r.post('/challenges/:id/photos', requireUser, upload.array('photos', 10), (req, res) => {
+  r.post('/challenges/:id/photos', requireUser, upload.fields([{ name: 'photos', maxCount: 10 }, { name: 'thumbs', maxCount: 10 }]), (req, res) => {
+    const photos = req.files?.photos || [];
+    const thumbs = req.files?.thumbs || [];
     try {
       if (!req.user.group_id) throw bad('Du bist in keiner Smallgroup');
       const c = one('SELECT id, deadline FROM challenges WHERE id = ? AND published = 1', int(req.params.id));
       if (!c) throw new HttpError(404, 'Challenge nicht gefunden');
       if (c.deadline && now() > c.deadline) throw bad('Die Deadline für diese Challenge ist vorbei');
-      if (!req.files?.length) throw bad('Bitte mindestens ein Bild auswählen');
+      if (!photos.length) throw bad('Bitte mindestens ein Bild auswählen');
       tx(() => {
         run(`INSERT INTO submissions (challenge_id, group_id, updated_at) VALUES (?, ?, ?)
              ON CONFLICT(challenge_id, group_id) DO UPDATE SET updated_at = excluded.updated_at`, c.id, req.user.group_id, now());
         const s = one('SELECT id, points FROM submissions WHERE challenge_id = ? AND group_id = ?', c.id, req.user.group_id);
         if (s.points !== null) throw bad('Eure Einreichung wurde schon bewertet');
-        for (const f of req.files) {
-          run('INSERT INTO photos (submission_id, user_id, file, created_at) VALUES (?, ?, ?, ?)', s.id, req.user.id, f.filename, now());
-        }
+        photos.forEach((f, i) => {
+          run('INSERT INTO photos (submission_id, user_id, file, thumb, created_at) VALUES (?, ?, ?, ?, ?)',
+            s.id, req.user.id, f.filename, thumbs[i]?.filename ?? null, now());
+        });
+        thumbs.slice(photos.length).forEach((f) => removeFile(f.filename));
         if (typeof req.body?.comment === 'string' && req.body.comment.trim()) {
           run('UPDATE submissions SET comment = ? WHERE id = ?', req.body.comment.trim().slice(0, 500), s.id);
         }
@@ -225,18 +336,19 @@ export function apiRouter({ io, game }) {
       throw e;
     }
     refresh('submissions');
+    refresh('gallery');
     res.json({ ok: true });
   });
 
   r.put('/challenges/:id/comment', requireUser, (req, res) => {
-    const s = one('SELECT id, points FROM submissions WHERE challenge_id = ? AND group_id = ?', int(req.params.id), req.user.group_id ?? -1);
+    const s = one('SELECT id FROM submissions WHERE challenge_id = ? AND group_id = ?', int(req.params.id), req.user.group_id ?? -1);
     if (!s) throw bad('Ladet zuerst ein Bild hoch');
     run('UPDATE submissions SET comment = ?, updated_at = ? WHERE id = ?', String(req.body?.comment || '').trim().slice(0, 500), now(), s.id);
     res.json({ ok: true });
   });
 
   r.delete('/photos/:id', requireUser, (req, res) => {
-    const p = one(`SELECT p.id, p.file, s.group_id, s.points FROM photos p JOIN submissions s ON s.id = p.submission_id WHERE p.id = ?`, int(req.params.id));
+    const p = one(`SELECT p.id, p.file, p.thumb, s.group_id, s.points FROM photos p JOIN submissions s ON s.id = p.submission_id WHERE p.id = ?`, int(req.params.id));
     if (!p) throw new HttpError(404, 'Bild nicht gefunden');
     if (req.user.role !== 'admin') {
       if (p.group_id !== req.user.group_id) throw new HttpError(403, 'Nicht eure Einreichung');
@@ -244,8 +356,28 @@ export function apiRouter({ io, game }) {
     }
     run('DELETE FROM photos WHERE id = ?', p.id);
     removeFile(p.file);
+    removeFile(p.thumb);
     refresh('submissions');
+    refresh('gallery');
     res.json({ ok: true });
+  });
+
+  // Galerie: alle Fotos aller Smallgroups
+  r.get('/gallery', requireUser, (req, res) => {
+    const admin = req.user.role === 'admin';
+    const cond = [admin ? '1 = 1' : 'c.published = 1'];
+    const params = [];
+    if (int(req.query.challenge)) { cond.push('c.id = ?'); params.push(int(req.query.challenge)); }
+    if (int(req.query.before)) { cond.push('p.id < ?'); params.push(int(req.query.before)); }
+    const max = Math.min(100, Math.max(1, int(req.query.limit, 60)));
+    const photos = all(`SELECT ${PHOTO_COLS}, g.name AS groupName, g.id AS groupId, c.id AS challengeId, c.title AS challengeTitle
+      FROM photos p JOIN submissions s ON s.id = p.submission_id JOIN groups g ON g.id = s.group_id
+      JOIN challenges c ON c.id = s.challenge_id LEFT JOIN users u ON u.id = p.user_id
+      WHERE ${cond.join(' AND ')} ORDER BY p.id DESC LIMIT ?`, ...params, max);
+    const challenges = int(req.query.before) ? undefined : all(`SELECT c.id, c.title, COUNT(p.id) AS count
+      FROM challenges c JOIN submissions s ON s.challenge_id = c.id JOIN photos p ON p.submission_id = s.id
+      ${admin ? '' : 'WHERE c.published = 1'} GROUP BY c.id ORDER BY c.created_at DESC`);
+    res.json({ photos, challenges, more: photos.length === max });
   });
 
   // ---------- Stadt Land Youth ----------
@@ -263,41 +395,52 @@ export function apiRouter({ io, game }) {
     deadline: parseDeadline(b.deadline),
     published: b.published === '0' || b.published === false ? 0 : 1,
   });
-  a.post('/challenges', upload.single('image'), (req, res) => {
+  const coverUpload = upload.fields([{ name: 'image', maxCount: 1 }, { name: 'thumb', maxCount: 1 }]);
+  a.post('/challenges', coverUpload, (req, res) => {
     try {
       const f = challengeFields(req.body || {});
-      const id = run(`INSERT INTO challenges (title, description, points, deadline, published, image, created_at)
-                      VALUES (?, ?, ?, ?, ?, ?, ?)`, f.title, f.description, f.points, f.deadline, f.published, req.file?.filename ?? null, now()).id;
+      const img = req.files?.image?.[0]?.filename ?? null;
+      const thumb = img ? req.files?.thumb?.[0]?.filename ?? null : null;
+      const id = run(`INSERT INTO challenges (title, description, points, deadline, published, image, thumb, created_at)
+                      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, f.title, f.description, f.points, f.deadline, f.published, img, thumb, now()).id;
       refresh('challenges');
       res.json({ ok: true, id });
     } catch (e) { cleanupUploads(req); throw e; }
   });
-  a.put('/challenges/:id', upload.single('image'), (req, res) => {
+  a.put('/challenges/:id', coverUpload, (req, res) => {
     try {
-      const c = one('SELECT id, image FROM challenges WHERE id = ?', int(req.params.id));
+      const c = one('SELECT id, image, thumb FROM challenges WHERE id = ?', int(req.params.id));
       if (!c) throw new HttpError(404, 'Challenge nicht gefunden');
       const f = challengeFields(req.body || {});
-      let image = c.image;
-      if (req.file) { removeFile(c.image); image = req.file.filename; }
-      else if (req.body?.removeImage === '1') { removeFile(c.image); image = null; }
-      run(`UPDATE challenges SET title = ?, description = ?, points = ?, deadline = ?, published = ?, image = ? WHERE id = ?`,
-        f.title, f.description, f.points, f.deadline, f.published, image, c.id);
+      let { image, thumb } = c;
+      const newImg = req.files?.image?.[0]?.filename;
+      if (newImg || req.body?.removeImage === '1') {
+        removeFile(c.image);
+        removeFile(c.thumb);
+        image = newImg ?? null;
+        thumb = newImg ? req.files?.thumb?.[0]?.filename ?? null : null;
+      }
+      run(`UPDATE challenges SET title = ?, description = ?, points = ?, deadline = ?, published = ?, image = ?, thumb = ? WHERE id = ?`,
+        f.title, f.description, f.points, f.deadline, f.published, image, thumb, c.id);
       refresh('challenges');
+      refresh('gallery');
       res.json({ ok: true });
     } catch (e) { cleanupUploads(req); throw e; }
   });
   a.delete('/challenges/:id', (req, res) => {
-    const c = one('SELECT id, image FROM challenges WHERE id = ?', int(req.params.id));
+    const c = one('SELECT id, image, thumb FROM challenges WHERE id = ?', int(req.params.id));
     if (!c) throw new HttpError(404, 'Challenge nicht gefunden');
-    const files = all('SELECT p.file FROM photos p JOIN submissions s ON s.id = p.submission_id WHERE s.challenge_id = ?', c.id);
+    const files = all('SELECT p.file, p.thumb FROM photos p JOIN submissions s ON s.id = p.submission_id WHERE s.challenge_id = ?', c.id);
     tx(() => {
       run(`DELETE FROM points WHERE ref IN (SELECT 'submission:' || id FROM submissions WHERE challenge_id = ?)`, c.id);
       run('DELETE FROM challenges WHERE id = ?', c.id);
     });
-    files.forEach((f) => removeFile(f.file));
+    files.forEach((f) => { removeFile(f.file); removeFile(f.thumb); });
     removeFile(c.image);
+    removeFile(c.thumb);
     refresh('challenges');
     refresh('points');
+    refresh('gallery');
     res.json({ ok: true });
   });
 
@@ -361,10 +504,10 @@ export function apiRouter({ io, game }) {
     const codes = Object.fromEntries(all('SELECT id, join_code FROM groups').map((g) => [g.id, g.join_code]));
     for (const g of groups) {
       g.code = codes[g.id];
-      g.users = all('SELECT id, username, display_name AS name FROM users WHERE group_id = ? ORDER BY display_name', g.id);
+      g.users = all('SELECT id, username AS email, display_name AS name, verified FROM users WHERE group_id = ? ORDER BY display_name', g.id);
     }
-    const loose = all(`SELECT id, username, display_name AS name, role FROM users WHERE group_id IS NULL ORDER BY role, display_name`);
-    res.json({ groups, loose });
+    const loose = all(`SELECT id, username AS email, display_name AS name, role, verified FROM users WHERE group_id IS NULL ORDER BY role, display_name`);
+    res.json({ groups, loose, mailConfigured });
   });
   a.post('/groups', (req, res) => {
     const id = createGroup(req.body?.name);
@@ -381,16 +524,19 @@ export function apiRouter({ io, game }) {
   });
   a.delete('/groups/:id', (req, res) => {
     const id = int(req.params.id);
+    const files = all('SELECT p.file, p.thumb FROM photos p JOIN submissions s ON s.id = p.submission_id WHERE s.group_id = ?', id);
     io.in(`group:${id}`).socketsLeave(`group:${id}`);
     run('DELETE FROM groups WHERE id = ?', id);
+    files.forEach((f) => { removeFile(f.file); removeFile(f.thumb); });
     refresh('groups');
     refresh('points');
+    refresh('gallery');
     game.broadcast();
     res.json({ ok: true });
   });
   a.put('/users/:id', (req, res) => {
     const u = one("SELECT id, group_id FROM users WHERE id = ? AND role = 'user'", int(req.params.id));
-    if (!u) throw new HttpError(404, 'Benutzer nicht gefunden');
+    if (!u) throw new HttpError(404, 'Person nicht gefunden');
     const b = req.body || {};
     if ('groupId' in b) {
       const gid = b.groupId ? int(b.groupId) : null;
@@ -399,17 +545,17 @@ export function apiRouter({ io, game }) {
       moveSocketsToGroup(u.id, u.group_id, gid);
     }
     if (b.password) {
-      if (String(b.password).length < 6) throw bad('Passwort: mindestens 6 Zeichen');
-      run('UPDATE users SET password_hash = ? WHERE id = ?', hashPassword(String(b.password)), u.id);
+      run('UPDATE users SET password_hash = ? WHERE id = ?', hashPassword(password(b.password)), u.id);
       run('DELETE FROM sessions WHERE user_id = ?', u.id);
     }
+    if (b.verified === true) run('UPDATE users SET verified = 1 WHERE id = ?', u.id);
     refresh('groups');
     game.broadcast();
     res.json({ ok: true });
   });
   a.delete('/users/:id', (req, res) => {
     const u = one("SELECT id FROM users WHERE id = ? AND role = 'user'", int(req.params.id));
-    if (!u) throw new HttpError(404, 'Benutzer nicht gefunden');
+    if (!u) throw new HttpError(404, 'Person nicht gefunden');
     io.in(`user:${u.id}`).disconnectSockets(true);
     run('DELETE FROM users WHERE id = ?', u.id);
     refresh('groups');

@@ -10,11 +10,15 @@ import { UPLOAD_DIR } from './db.js';
 import { authMiddleware, userFromCookieHeader, loadUser, ensureAdmin, HttpError } from './auth.js';
 import { apiRouter } from './routes.js';
 import { createGame } from './game.js';
+import { mailConfigured } from './mail.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 3000;
 
 ensureAdmin();
+if (!mailConfigured && process.env.EMAIL_VERIFICATION !== 'off') {
+  console.log('  ⚠️  SMTP ist nicht eingerichtet – Bestätigungs-Mails werden nur hier in der Konsole angezeigt.');
+}
 
 const app = express();
 app.set('trust proxy', 1);
@@ -37,6 +41,11 @@ app.get('/uploads/:file', (req, res) => {
   res.sendFile(full);
 });
 
+// Kurze Links aus den Mails → passende Seite in der App
+app.get('/bestaetigen/:token', (req, res) => res.redirect(`/#/bestaetigen?token=${encodeURIComponent(req.params.token)}`));
+app.get('/passwort-neu/:token', (req, res) => res.redirect(`/#/passwort-neu?token=${encodeURIComponent(req.params.token)}`));
+app.get('/einladung/:code', (req, res) => res.redirect(`/#/registrieren?code=${encodeURIComponent(req.params.code)}`));
+
 app.use(express.static(path.join(__dirname, '..', 'public'), { extensions: ['html'] }));
 
 // Fehler einheitlich als JSON zurückgeben
@@ -47,7 +56,10 @@ app.use((err, req, res, _next) => {
   }
   const status = err instanceof HttpError ? err.status : err.status || 500;
   if (status >= 500) console.error(err);
-  res.status(status).json({ error: status >= 500 ? 'Serverfehler – bitte nochmals versuchen' : err.message });
+  res.status(status).json({
+    error: status >= 500 ? 'Serverfehler – bitte nochmals versuchen' : err.message,
+    code: err instanceof HttpError ? err.code : undefined,
+  });
 });
 
 // ---------- Echtzeit (Socket.IO) ----------

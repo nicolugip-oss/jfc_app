@@ -78,26 +78,49 @@ export function requireAdmin(req, _res, next) {
 export function ensureAdmin() {
   const username = (process.env.ADMIN_USERNAME || 'admin').toLowerCase();
   const envPw = process.env.ADMIN_PASSWORD;
-  const existing = one('SELECT id FROM users WHERE username = ?', username);
+  const existing = one('SELECT id, password_hash FROM users WHERE username = ?', username);
   if (existing) {
-    run("UPDATE users SET role = 'admin' WHERE id = ?", existing.id);
-    if (envPw) run('UPDATE users SET password_hash = ? WHERE id = ?', hashPassword(envPw), existing.id);
+    run("UPDATE users SET role = 'admin', verified = 1 WHERE id = ?", existing.id);
+    // Passwort geändert? Dann alle bisherigen Admin-Geräte ausloggen.
+    if (envPw && !verifyPassword(envPw, existing.password_hash)) {
+      run('UPDATE users SET password_hash = ? WHERE id = ?', hashPassword(envPw), existing.id);
+      run('DELETE FROM sessions WHERE user_id = ?', existing.id);
+    }
     return;
   }
   const pw = envPw || crypto.randomBytes(6).toString('base64url');
-  run(`INSERT INTO users (username, display_name, password_hash, role, created_at)
-       VALUES (?, 'Admin', ?, 'admin', ?)`, username, hashPassword(pw), Date.now());
+  run(`INSERT INTO users (username, display_name, password_hash, role, verified, created_at)
+       VALUES (?, 'Admin', ?, 'admin', 1, ?)`, username, hashPassword(pw), Date.now());
   if (!envPw) console.log(`\n  ➜ Admin-Login erstellt:  Benutzer "${username}"  Passwort "${pw}"\n    (Setze ADMIN_PASSWORD, um ein eigenes Passwort zu verwenden.)\n`);
 }
 
-// Sehr einfache Bremse gegen Passwort-Raten
-const attempts = new Map();
-export function loginRateLimit(req, _res, next) {
-  const key = req.ip;
-  const now = Date.now();
-  const list = (attempts.get(key) || []).filter((t) => now - t < 60_000);
-  if (list.length >= 15) throw new HttpError(429, 'Zu viele Versuche – warte kurz eine Minute.');
-  list.push(now);
-  attempts.set(key, list);
-  next();
+// Einmal-Links für Mails (Bestätigung, Passwort zurücksetzen). In der DB liegt nur der Hash.
+const sha = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
+export function createToken(userId, purpose, ttlMs) {
+  const token = crypto.randomBytes(32).toString('base64url');
+  run('DELETE FROM tokens WHERE user_id = ? AND purpose = ?', userId, purpose);
+  run('INSERT INTO tokens (hash, user_id, purpose, expires_at) VALUES (?, ?, ?, ?)', sha(token), userId, purpose, Date.now() + ttlMs);
+  return token;
 }
+export function consumeToken(token, purpose) {
+  const row = one('SELECT user_id, expires_at FROM tokens WHERE hash = ? AND purpose = ?', sha(token), purpose);
+  if (!row) return null;
+  run('DELETE FROM tokens WHERE hash = ?', sha(token));
+  return row.expires_at > Date.now() ? row.user_id : null;
+}
+
+// Bremse gegen Passwort-Raten und Mail-Spam.
+// Wichtig fürs Camp: Alle hängen im selben WLAN (gleiche IP) – darum pro E-Mail zählen
+// und pro IP nur sehr grosszügig begrenzen.
+const buckets = new Map();
+export function limit(key, max, windowMs, message = 'Zu viele Versuche – warte kurz und versuche es nochmals.') {
+  const now = Date.now();
+  const list = (buckets.get(key) || []).filter((t) => now - t < windowMs);
+  if (list.length >= max) throw new HttpError(429, message);
+  list.push(now);
+  buckets.set(key, list);
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, list] of buckets) if (!list.some((t) => now - t < 3_600_000)) buckets.delete(k);
+}, 600_000).unref();

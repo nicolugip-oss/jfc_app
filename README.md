@@ -1,76 +1,110 @@
 # Jesus First Camp App
 
-Web-App für das **Jesus First Camp 26/27** (ICF Youth Zürich): Smallgroup-Challenges mit Foto-Upload, Punkte und Rangliste sowie das Live-Spiel **Stadt Land Youth**.
+Web-App für das **Jesus First Camp 26/27** (ICF Youth Zürich): Smallgroup-Challenges mit Foto-Upload, Galerie, Punkte und Rangliste sowie das Live-Spiel **Stadt Land Youth**.
 
-Die App läuft im Browser, und man kann sie auf den Homescreen legen (iPhone: Teilen → „Zum Home-Bildschirm“). Es gibt keinen App Store und keine Installation.
+Die App läuft im Browser, und man kann sie auf den Homescreen legen (iPhone: Teilen → „Zum Home-Bildschirm“). Es gibt keinen App Store.
 
 ## Funktionen
 
-**Für alle (Benutzer-Login)**
-- Registrieren mit Name, Benutzername, Passwort. Dabei **eine Smallgroup erstellen** (man bekommt einen 5-stelligen Code) **oder mit Code beitreten**
-- Challenges ansehen, **Fotos hochladen** (mehrere, werden automatisch verkleinert), Kommentar dazuschreiben
-- Rangliste mit Aufschlüsselung (Challenges / Spiel / Bonus)
+**Für alle**
+- **Registrieren mit E-Mail.** Danach kommt eine Bestätigungs-Mail, und erst mit dem Link darin ist das Konto aktiv. Bei der Registrierung erstellt man eine Smallgroup oder tritt einer bei.
+- **Smallgroup einladen:** Die Person, welche die Smallgroup erstellt hat, teilt einen **Einladungslink** (z.B. per WhatsApp). Wer den Link öffnet und sich registriert, landet direkt in der richtigen Gruppe. Den 5-stelligen Code kann man auch eintippen.
+- **Passwort vergessen:** Ein Link per Mail ist 2 Stunden gültig.
+- **Challenges** ansehen und **Fotos hochladen**. Die Fotos werden automatisch verkleinert, und es wird zusätzlich ein kleines Vorschaubild erstellt.
+- **Galerie** mit allen Fotos aller Smallgroups, filterbar nach Challenge. Ein Foto lässt sich gross anzeigen, und man kann durch die Fotos wischen.
+- **Rangliste** mit Aufschlüsselung nach Challenges, Spiel und Bonus
 - **Stadt Land Youth** live mitspielen. Alle aus der Smallgroup können gleichzeitig auf ihren Handys mittippen.
 
-**Für Admins (spezielles Admin-Login)**
-- Challenges erstellen/bearbeiten: Titel, Beschreibung, Punkte, Titelbild, Deadline, Entwurf/sichtbar
-- Einreichungen bewerten (Punkte pro Smallgroup)
-- **Bonuspunkte** an eine oder mehrere Smallgroups (z.B. Zusatz-Challenge). Negative Punkte sind auch möglich.
-- Smallgroups verwalten: vorab erstellen, umbenennen, Leute verschieben, Passwort zurücksetzen
-- Rangliste verstecken (für die grosse Auflösung am Schluss)
+**Für Admins** (ein gemeinsames Admin-Konto, mehrere Leute können gleichzeitig eingeloggt sein)
+- Challenges erstellen und bearbeiten: Titel, Beschreibung, Punkte, Titelbild, Deadline, Entwurf/sichtbar
+- Einreichungen bewerten
+- **Bonuspunkte** an eine oder mehrere Smallgroups vergeben (z.B. für eine Zusatz-Challenge). Negative Punkte sind auch möglich.
+- Smallgroups verwalten: vorab erstellen, umbenennen, Leute verschieben, Passwort setzen, **Konten manuell freischalten** (falls eine Mail nicht ankommt)
+- Unpassende Fotos direkt in der Galerie löschen
+- Rangliste verstecken, z.B. für die grosse Auflösung am Schluss
 - Stadt Land Youth steuern (siehe unten)
-- **Beamer-Ansicht** (`/#/beamer`) für die Leinwand: Lobby, Buchstabe + Countdown, Live-Fortschritt, STOPP, Antworten, Spielstand
+- **Beamer-Ansicht** (`/#/beamer`) für die Leinwand: Lobby, Buchstabe mit Countdown, Live-Fortschritt, STOPP, Antworten, Spielstand
 
 ## Stadt Land Youth: Ablauf
 
-1. Admin eröffnet ein Spiel und legt Kategorien, optionales Zeitlimit und Buchstaben fest.
+1. Der Admin eröffnet ein Spiel und legt Kategorien, ein optionales Zeitlimit und die Buchstaben fest.
 2. Die Smallgroups treten in der App bei. Eine Person reicht, dann ist die ganze Gruppe dabei.
-3. Admin startet die Runde. Auf allen Handys und auf dem Beamer **würfelt sich gleichzeitig ein Buchstabe aus**, dann zählt es **5 … 4 … 3 … 2 … 1** herunter.
+3. Der Admin startet die Runde. Auf allen Handys und auf dem Beamer **würfelt sich gleichzeitig ein Buchstabe aus**, dann zählt es **5 … 4 … 3 … 2 … 1** herunter.
 4. Die Gruppen füllen die Kategorien aus. Die Eingaben werden live zwischen den Handys derselben Gruppe synchronisiert.
-5. Sobald **eine Gruppe alles ausgefüllt hat und STOPP drückt, ist für alle Schluss**. Die Felder werden gesperrt und die Handys vibrieren.
-6. Admin sieht alle Antworten mit einem **Punktevorschlag** (20 = als einzige Gruppe, 10 = einzigartig, 5 = doppelt, 0 = leer/falscher Buchstabe), kann jede Antwort per Tipp auf 0/5/10/20 ändern und vergibt dann die Punkte.
-7. Nächste Runde. Bereits gespielte Buchstaben kommen nicht nochmals.
+5. Sobald **eine Gruppe alles ausgefüllt hat und STOPP drückt, ist für alle Schluss**.
+6. Der Admin sieht alle Antworten mit einem **Punktevorschlag**: 20 = als einzige Gruppe, 10 = einzigartig, 5 = doppelt, 0 = leer oder falscher Buchstabe. Er kann jede Antwort per Tipp ändern und vergibt dann die Punkte.
 
-## Lokal starten
+## Auf dem eigenen Server betreiben
 
-Voraussetzung: **Node.js 22.13 oder neuer**
+### Variante A: Docker (empfohlen)
 
 ```bash
-npm install
-ADMIN_PASSWORD=meinGeheimesPasswort npm start
+git clone https://github.com/nicolugip-oss/jfc_app.git
+cd jfc_app
+cp .env.example .env      # Werte ausfüllen (Admin-Passwort, APP_URL, SMTP)
+docker compose up -d --build
 ```
 
-Danach http://localhost:3000 öffnen. Admin-Login: Benutzer `admin` mit dem Passwort aus `ADMIN_PASSWORD`. Ohne `ADMIN_PASSWORD` wird beim ersten Start ein zufälliges Passwort in der Konsole angezeigt.
+Die App läuft dann auf `127.0.0.1:3000`. Datenbank und Fotos liegen im Docker-Volume `jfc-data`.
 
-## Einstellungen (Umgebungsvariablen)
+- Logs: `docker compose logs -f`
+- Update: `git pull && docker compose up -d --build`
+- Backup: `docker compose exec -T app tar czf - -C /data . > jfc-backup-$(date +%F).tgz`
 
-| Variable | Bedeutung | Standard |
-|---|---|---|
-| `ADMIN_USERNAME` | Benutzername des Admins | `admin` |
-| `ADMIN_PASSWORD` | Passwort des Admins (wird bei jedem Start gesetzt) | zufällig |
-| `REGISTRATION_CODE` | Optionaler Camp-Code, ohne den man sich nicht registrieren kann (gegen Fremde) | – |
-| `DATA_DIR` | Ordner für Datenbank und Bilder | `./data` |
-| `PORT` | Port | `3000` |
+### Variante B: direkt mit Node.js (ab Version 22.13)
 
-Farben anpassen: oben in `public/style.css` (`--accent` usw.).
+```bash
+npm ci --omit=dev
+cp .env.example .env      # Werte ausfüllen
+npm start
+```
 
-## Online stellen (Hosting)
+Damit die App nach einem Neustart des Servers automatisch wieder startet, z.B. mit `systemd` oder `pm2`. Daten liegen in `./data` (oder `DATA_DIR`).
 
-Die App ist **ein einziger Node.js-Server** mit SQLite-Datenbank und Bildern auf der Festplatte. Man braucht also einen Hoster mit **dauerhaftem Speicher (Volume/Disk)**:
+### HTTPS (Pflicht)
 
-- **Railway**, **Render** (mit Persistent Disk) oder **Fly.io** (mit Volume): ca. 5–10 CHF/Monat, `DATA_DIR` auf das Volume zeigen lassen
-- **Kleiner VPS** (z.B. Infomaniak, Hetzner): `npm start` hinter einem HTTPS-Proxy (Caddy/nginx)
+Vor die App gehört ein Reverse-Proxy mit HTTPS. Am einfachsten geht das mit **Caddy**, das die Zertifikate automatisch holt. Beispiel `Caddyfile`:
 
-Wichtig: **HTTPS** verwenden und `ADMIN_PASSWORD` setzen. Echtzeit läuft über WebSockets (Socket.IO). Das unterstützen alle oben genannten Hoster.
+```
+jfc.example.ch {
+    reverse_proxy 127.0.0.1:3000
+}
+```
 
-**Backup:** Den Ordner `DATA_DIR` sichern (enthält `app.db` und `uploads/`).
+Mit nginx funktioniert es auch. Wichtig: WebSockets durchlassen (`proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";`), sonst läuft Stadt Land Youth nicht live.
+
+## Einstellungen (`.env`)
+
+| Variable | Bedeutung |
+|---|---|
+| `ADMIN_PASSWORD` | Passwort fürs Admin-Konto. Beim Login ins Feld „E-Mail“ einfach `admin` eingeben. Wird das Passwort geändert, werden alle Admin-Geräte ausgeloggt. |
+| `ADMIN_USERNAME` | Login-Name des Admins (Standard `admin`) |
+| `APP_URL` | Öffentliche Adresse, z.B. `https://jfc.example.ch` (für die Links in den Mails) |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` | Zugang zum Mailserver. Port 587 = STARTTLS, Port 465 = SSL. |
+| `MAIL_FROM` | Absender, z.B. `Jesus First Camp <noreply@icf.church>` |
+| `EMAIL_VERIFICATION` | `off` = Konten sind ohne Mail-Bestätigung sofort aktiv (Notfall-Schalter) |
+| `REGISTRATION_CODE` | Optionaler Camp-Code, ohne den man sich nicht registrieren kann |
+| `DATA_DIR`, `PORT` | Datenordner (Standard `./data`) und Port (Standard `3000`) |
+
+Ohne SMTP-Einstellungen werden die Mails nur in der Server-Konsole ausgegeben (zum Testen). Im Admin-Bereich erscheint dann ein Hinweis, und neue Konten können dort von Hand freigeschaltet werden.
+
+**Tipp zum Mailversand:** Eine Absender-Adresse der eigenen Domain mit korrekt eingerichtetem SPF/DKIM landet seltener im Spam. Falls nötig, gibt es auch Dienste wie Brevo oder Postmark mit SMTP-Zugang.
+
+## Design
+
+Farben stehen oben in `public/style.css`. Das Logo liegt in `public/logo.png`, die Icons in `public/icon-*.png`. Die Schrift ist [Archivo](https://github.com/Omnibus-Type/Archivo) (SIL Open Font License, Lizenz in `public/fonts/`). Sie wird selbst gehostet, es gibt also keine Verbindung zu Google Fonts.
 
 ## Technik
 
-- `server/index.js`: Express-Server, Socket.IO, Auslieferung der Bilder (nur eingeloggt)
-- `server/routes.js`: REST-API (Login, Smallgroups, Challenges, Punkte, Admin)
-- `server/game.js`: Spiellogik Stadt Land Youth (der Server bestimmt Buchstabe, Zeiten und STOPP)
-- `server/db.js`: SQLite-Schema (eingebaut in Node.js, keine Datenbank-Installation)
+- `server/index.js`: Express-Server, Socket.IO (Echtzeit), Auslieferung der Bilder (nur eingeloggt)
+- `server/routes.js`: REST-API (Registrierung, Login, Smallgroups, Challenges, Galerie, Punkte, Admin)
+- `server/game.js`: Spiellogik von Stadt Land Youth. Der Server bestimmt Buchstabe, Zeiten und STOPP.
+- `server/mail.js`: Mailversand (Bestätigung, Passwort zurücksetzen)
+- `server/db.js`: SQLite-Datenbank (in Node.js eingebaut, nichts zu installieren)
 - `public/`: Frontend ohne Build-Schritt (`app.js`, `style.css`)
 
-Passwörter werden mit scrypt gehasht. Hochgeladene Bilder sind nur für eingeloggte Personen abrufbar.
+Sicherheit:
+- Passwörter werden mit scrypt gehasht.
+- Die Links in den Mails sind einmalig gültig, in der Datenbank liegt nur ihr Hash.
+- Fotos sind nur für eingeloggte Personen abrufbar.
+- Login-Versuche und Mailversand werden pro E-Mail-Adresse gebremst. Das ist wichtig, weil im Camp-WLAN alle dieselbe IP haben.

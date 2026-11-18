@@ -29,7 +29,7 @@ async function api(method, url, body) {
   try { res = await fetch(url, opts); } catch { throw new Error('Keine Verbindung – bist du online?'); }
   const data = await res.json().catch(() => ({}));
   if (res.status === 401 && S.me && !url.endsWith('/login')) { S.me = null; go('/login'); }
-  if (!res.ok) throw new Error(data.error || 'Fehler');
+  if (!res.ok) throw Object.assign(new Error(data.error || 'Fehler'), { code: data.code, status: res.status });
   return data;
 }
 
@@ -57,7 +57,7 @@ const medal = (i) => ['🥇', '🥈', '🥉'][i] || String(i + 1);
 const vibrate = (p) => { try { navigator.vibrate?.(p); } catch {} };
 
 // Bilder vor dem Upload verkleinern (spart Datenvolumen im Camp-WLAN)
-async function shrinkImage(file, max = 1600) {
+async function shrinkImage(file, max = 1600, quality = 0.85) {
   try {
     if (file.type === 'image/gif') return file;
     const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
@@ -66,20 +66,71 @@ async function shrinkImage(file, max = 1600) {
     c.width = Math.round(bmp.width * scale);
     c.height = Math.round(bmp.height * scale);
     c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
-    const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.85));
+    const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', quality));
     return blob ? new File([blob], file.name.replace(/\.\w+$/, '') + '.jpg', { type: 'image/jpeg' }) : file;
   } catch { return file; }
 }
 
+// Bild gross anzeigen – mit Blättern (Wischen / Pfeiltasten) innerhalb eines [data-lb]-Bereichs
 document.addEventListener('click', (e) => {
   const img = e.target.closest('img[data-full]');
   if (!img) return;
+  const group = img.closest('[data-lb]');
+  const imgs = group ? $$('img[data-full]', group) : [img];
+  openLightbox(imgs.map((i) => ({ full: i.dataset.full, cap: i.dataset.cap || '', sub: i.dataset.sub || '', id: i.dataset.photoId })), imgs.indexOf(img));
+});
+
+function openLightbox(items, index) {
+  let i = index;
   const box = document.createElement('div');
   box.className = 'lightbox';
-  box.innerHTML = `<img src="${esc(img.dataset.full)}" alt="">`;
-  box.onclick = () => box.remove();
+  const show = () => {
+    const it = items[i];
+    box.innerHTML = out(html`
+      <div class="lb-img"><img src="${it.full}" alt=""></div>
+      ${items.length > 1 ? html`<button class="lb-nav lb-prev" data-nav="-1" aria-label="Zurück">‹</button><button class="lb-nav lb-next" data-nav="1" aria-label="Weiter">›</button>` : ''}
+      <div class="lb-bar">
+        <div class="lb-cap">${it.cap ? html`<b>${it.cap}</b>` : ''}${it.sub ? html`<span class="muted small">${it.sub}</span>` : ''}${items.length > 1 ? html`<div class="muted small">${i + 1} / ${items.length}</div>` : ''}</div>
+        ${isAdmin() && it.id ? html`<button class="btn sm danger" data-lbdel>Löschen</button>` : ''}
+        <button class="btn sm" data-lbclose>Schliessen</button>
+      </div>`);
+  };
+  const move = (d) => { if (items.length > 1) { i = (i + d + items.length) % items.length; show(); } };
+  const onKey = (e) => {
+    if (e.key === 'Escape') close();
+    if (e.key === 'ArrowLeft') move(-1);
+    if (e.key === 'ArrowRight') move(1);
+  };
+  const close = () => { box.remove(); document.removeEventListener('keydown', onKey); };
+  box.addEventListener('click', (e) => {
+    const nav = e.target.closest('[data-nav]');
+    if (nav) return move(Number(nav.dataset.nav));
+    const del = e.target.closest('[data-lbdel]');
+    if (del) {
+      if (!confirm('Dieses Foto für alle löschen?')) return;
+      return busy(del, async () => {
+        await api('DELETE', `/api/photos/${items[i].id}`);
+        toast('Foto gelöscht');
+        items.splice(i, 1);
+        if (!items.length) return close();
+        i = Math.min(i, items.length - 1);
+        show();
+      });
+    }
+    if (e.target.closest('[data-lbclose]') || e.target.classList.contains('lb-img')) close();
+  });
+  let x0 = null;
+  box.addEventListener('touchstart', (e) => { x0 = e.touches[0].clientX; }, { passive: true });
+  box.addEventListener('touchend', (e) => {
+    if (x0 === null) return;
+    const dx = e.changedTouches[0].clientX - x0;
+    x0 = null;
+    if (Math.abs(dx) > 50) move(dx < 0 ? 1 : -1);
+  });
+  document.addEventListener('keydown', onKey);
+  show();
   document.body.append(box);
-});
+}
 
 function modal(content) {
   const bg = document.createElement('div');
@@ -96,8 +147,12 @@ function modal(content) {
 const routes = [
   { path: '/login', view: viewLogin, public: true, bare: true },
   { path: '/registrieren', view: viewRegister, public: true, bare: true },
+  { path: '/passwort-vergessen', view: viewForgot, public: true, bare: true },
+  { path: '/bestaetigen', view: viewVerify, any: true, bare: true },
+  { path: '/passwort-neu', view: viewReset, any: true, bare: true },
   { path: '/', view: viewHome, tab: 'home' },
   { path: '/challenges', view: viewChallenges, tab: 'challenges' },
+  { path: '/galerie', view: viewGallery, tab: 'challenges' },
   { path: '/challenges/:id', view: viewChallenge, tab: 'challenges' },
   { path: '/spiel', view: viewGame, tab: 'spiel' },
   { path: '/rangliste', view: viewLeaderboard, tab: 'rangliste' },
@@ -126,7 +181,8 @@ async function route() {
   let r, params;
   for (const x of routes) { params = matchPath(x.path, path); if (params) { r = x; break; } }
   if (!r) return go('/');
-  if (!r.public && !S.me) return go('/login');
+  params.query = new URLSearchParams(path.split('?')[1] || '');
+  if (!r.public && !r.any && !S.me) return go('/login');
   if (r.public && S.me) return go('/');
   if (r.admin && !isAdmin()) return go('/');
   S.view?.destroy?.();
@@ -157,7 +213,7 @@ function shell(r) {
   ];
   app.innerHTML = out(html`
     <header class="topbar">
-      <a class="logo" href="#/">JESUS<br><b>FIRST</b></a>
+      <a class="logo" href="#/"><img src="/logo-96.png" alt="JFC"><span>Jesus First Camp</span></a>
       <div class="grow"></div>
       <span class="group-chip">${isAdmin() ? '🛠️ Admin' : S.me.group ? `👥 ${S.me.group.name}` : 'Keine Smallgroup'}</span>
       <span class="conn ${S.socket?.connected ? '' : 'off'}" id="conn" title="Live-Verbindung"></span>
@@ -211,30 +267,58 @@ function disconnectSocket() {
 /* =========================================================
    Login & Registrierung
    ========================================================= */
+const brandHtml = () => html`
+  <div class="brand"><img src="/logo.png" alt="JFC Logo"><div><b>Jesus<br>First Camp</b><small>ICF Youth Zürich · 26/27</small></div></div>`;
+const authPage = (content) => html`<div class="auth-wrap"><div class="auth">${brandHtml()}${content}</div></div>`;
+
+async function refreshMe() {
+  const me = await api('GET', '/api/me');
+  S.me = me.user ? me : null;
+  return S.me;
+}
+
 async function viewLogin(main) {
-  set(main, html`
-    <div class="auth">
-      <div class="brand">Jesus<b>First</b><small>CAMP 26/27 · ICF YOUTH ZÜRICH</small></div>
-      <form class="card" id="f">
-        <h2>Einloggen</h2>
-        <label class="field"><span>Benutzername</span><input class="input" name="username" autocomplete="username" autocapitalize="none" required></label>
-        <label class="field"><span>Passwort</span><input class="input" name="password" type="password" autocomplete="current-password" required></label>
-        <button class="btn primary block big">Los geht's</button>
-      </form>
-      <p class="center muted" style="margin-top:18px">Noch kein Konto? <a href="#/registrieren">Jetzt registrieren</a></p>
-    </div>`);
-  $('#f', main).onsubmit = (e) => {
+  set(main, authPage(html`
+    <form class="card" id="f">
+      <h2>Einloggen</h2>
+      <label class="field"><span>E-Mail</span><input class="input" name="email" type="text" inputmode="email" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>
+      <label class="field"><span>Passwort</span><input class="input" name="password" type="password" autocomplete="current-password" required></label>
+      <div data-msg></div>
+      <button class="btn primary block big">Los geht's</button>
+      <p class="center small" style="margin:14px 0 0"><a href="#/passwort-vergessen">Passwort vergessen?</a></p>
+    </form>
+    <p class="center muted" style="margin-top:18px">Noch kein Konto? <a href="#/registrieren">Jetzt registrieren</a></p>`));
+  const form = $('#f', main);
+  form.onsubmit = (e) => {
     e.preventDefault();
-    const f = Object.fromEntries(new FormData(e.target));
+    const f = Object.fromEntries(new FormData(form));
+    const msg = $('[data-msg]', main);
+    set(msg, '');
     busy(e.submitter, async () => {
-      await api('POST', '/api/login', f);
+      try {
+        await api('POST', '/api/login', f);
+      } catch (err) {
+        if (err.code === 'unverified') return showResend(msg, f.email, err.message);
+        throw err;
+      }
       await afterLogin();
     });
   };
 }
 
+function showResend(el, email, message) {
+  set(el, html`<div class="notice" style="margin-bottom:12px">${message}
+    <div style="margin-top:10px"><button type="button" class="btn sm" data-resend>Bestätigungs-Mail nochmals senden</button></div></div>`);
+  const b = $('[data-resend]', el);
+  b.onclick = () => busy(b, async () => {
+    await api('POST', '/api/resend', { email });
+    toast('Mail ist unterwegs – schau auch im Spam-Ordner nach.', 'ok');
+  });
+}
+
 async function afterLogin() {
-  S.me = await api('GET', '/api/me');
+  await refreshMe();
+  disconnectSocket();
   connectSocket();
   go('/');
 }
@@ -259,58 +343,152 @@ function bindGroupPicker(root) {
     $('[data-for=join]', root).classList.toggle('hidden', mode !== 'join');
     $('[data-for=create]', root).classList.toggle('hidden', mode !== 'create');
     $('[data-hint]', root).textContent = mode === 'join'
-      ? 'Den Code bekommst du von jemandem aus deiner Smallgroup, die/der sie schon erstellt hat.'
-      : 'Nur EINE Person pro Smallgroup erstellt die Gruppe. Danach bekommst du einen Code für die anderen.';
+      ? 'Am einfachsten: Lass dir von deiner Smallgroup den Einladungslink schicken. Oder gib hier den Code ein.'
+      : 'Nur EINE Person pro Smallgroup erstellt die Gruppe und lädt danach alle anderen mit einem Link ein.';
   };
   $$('[data-seg] button', root).forEach((b) => (b.onclick = () => apply(b.dataset.mode)));
   apply($('[name=groupMode]', root).value);
 }
 
-async function viewRegister(main) {
-  set(main, html`
-    <div class="auth">
-      <div class="brand">Jesus<b>First</b><small>CAMP 26/27 · ICF YOUTH ZÜRICH</small></div>
-      <form class="card" id="f">
-        <h2>Registrieren</h2>
-        ${S.config.registrationCode ? html`<label class="field"><span>Camp-Code (bekommst du vor Ort)</span><input class="input" name="regCode" required autocomplete="off"></label>` : ''}
-        <label class="field"><span>Dein Name</span><input class="input" name="displayName" maxlength="40" required placeholder="Vorname + Initial, z.B. Lea M."></label>
-        <label class="field"><span>Benutzername</span><input class="input" name="username" maxlength="30" required autocapitalize="none" autocomplete="username" placeholder="nur a–z, 0–9, . _ -"></label>
-        <label class="field"><span>Passwort (mind. 6 Zeichen)</span><input class="input" name="password" type="password" minlength="6" required autocomplete="new-password"></label>
-        <h3 style="margin-top:18px">Deine Smallgroup</h3>
-        ${groupPicker('join')}
-        <button class="btn primary block big">Konto erstellen</button>
-      </form>
-      <p class="center muted" style="margin-top:18px">Schon ein Konto? <a href="#/login">Einloggen</a></p>
-    </div>`);
+async function viewRegister(main, { query }) {
+  // Einladungslink: /einladung/CODE → #/registrieren?code=CODE
+  const code = (query.get('code') || '').trim().toUpperCase();
+  const inviteName = code ? await api('GET', `/api/invite/${encodeURIComponent(code)}`).then((r) => r.name).catch(() => null) : null;
+  set(main, authPage(html`
+    <form class="card" id="f">
+      <h2>Registrieren</h2>
+      ${inviteName ? html`<div class="notice invite"><span class="ic">👥</span><div>Du wurdest in die Smallgroup <b>${inviteName}</b> eingeladen.</div></div>`
+        : code ? html`<div class="notice error" style="margin-bottom:14px">Dieser Einladungslink ist ungültig. Frag deine Smallgroup nach einem neuen.</div>` : ''}
+      ${S.config.registrationCode ? html`<label class="field"><span>Camp-Code (bekommst du vor Ort)</span><input class="input" name="regCode" required autocomplete="off"></label>` : ''}
+      <label class="field"><span>Dein Name</span><input class="input" name="displayName" maxlength="40" required placeholder="Vorname + Initial, z.B. Lea M." autocomplete="name"></label>
+      <label class="field"><span>E-Mail</span><input class="input" name="email" type="email" maxlength="120" required autocapitalize="none" spellcheck="false" autocomplete="email"></label>
+      <label class="field"><span>Passwort (mind. 8 Zeichen)</span><input class="input" name="password" type="password" minlength="8" required autocomplete="new-password"></label>
+      ${inviteName ? html`<input type="hidden" name="groupMode" value="join"><input type="hidden" name="groupCode" value="${code}">`
+        : html`<h3 style="margin-top:18px">Deine Smallgroup</h3>${groupPicker('join')}`}
+      <div data-msg></div>
+      <button class="btn primary block big">Konto erstellen</button>
+    </form>
+    <p class="center muted" style="margin-top:18px">Schon ein Konto? <a href="#/login">Einloggen</a></p>`));
   const form = $('#f', main);
-  bindGroupPicker(form);
+  if (!inviteName) bindGroupPicker(form);
   form.onsubmit = (e) => {
     e.preventDefault();
     const f = Object.fromEntries(new FormData(form));
+    const msg = $('[data-msg]', main);
+    set(msg, '');
     busy(e.submitter, async () => {
-      await api('POST', '/api/register', f);
-      await afterLogin();
-      if (f.groupMode === 'create') showGroupCode();
+      let res;
+      try {
+        res = await api('POST', '/api/register', f);
+      } catch (err) {
+        if (err.code === 'unverified') return showResend(msg, f.email, err.message);
+        throw err;
+      }
+      if (!res.verify) {
+        await afterLogin();
+        if (f.groupMode === 'create') showGroupCode();
+        return;
+      }
+      showCheckMail(main, res.email, res.mailError);
     });
   };
 }
 
+function showCheckMail(main, email, mailError) {
+  set(main, authPage(html`
+    <div class="card center">
+      <div style="font-size:46px">📬</div>
+      <h2>Check deine Mails!</h2>
+      ${mailError ? html`<div class="notice error" style="margin-bottom:12px">Die Mail konnte gerade nicht gesendet werden. Versuch es mit dem Button unten nochmals.</div>` : ''}
+      <p>Wir haben eine Mail an <b>${email}</b> geschickt. Klick auf den Link darin, dann ist dein Konto aktiv.</p>
+      <p class="small muted">Nichts bekommen? Schau im Spam-Ordner nach.</p>
+      <button class="btn block" data-resend>Mail nochmals senden</button>
+    </div>
+    <p class="center muted" style="margin-top:18px"><a href="#/login">Zum Login</a></p>`));
+  window.scrollTo(0, 0);
+  const b = $('[data-resend]', main);
+  b.onclick = () => busy(b, async () => {
+    await api('POST', '/api/resend', { email });
+    toast('Mail ist unterwegs ✔', 'ok');
+  });
+}
+
+async function viewVerify(main, { query }) {
+  set(main, authPage(html`<div class="card center" data-box><p>Einen Moment …</p></div>`));
+  try {
+    await api('POST', '/api/verify', { token: query.get('token') || '' });
+    await afterLogin();
+    toast('E-Mail bestätigt – willkommen! 🎉', 'ok');
+    if (S.me?.group?.isCreator && S.me.group.members.length <= 1) showGroupCode();
+  } catch (e) {
+    set($('[data-box]', main), html`<div style="font-size:40px">😕</div><p>${e.message}</p><a class="btn primary block" href="#/login">Zum Login</a>`);
+  }
+}
+
+async function viewForgot(main) {
+  set(main, authPage(html`
+    <form class="card" id="f">
+      <h2>Passwort vergessen</h2>
+      <p class="small muted">Gib deine E-Mail ein. Wir schicken dir einen Link, mit dem du ein neues Passwort festlegen kannst.</p>
+      <label class="field"><span>E-Mail</span><input class="input" name="email" type="email" required autocapitalize="none" spellcheck="false" autocomplete="email"></label>
+      <button class="btn primary block big">Link senden</button>
+    </form>
+    <p class="center muted" style="margin-top:18px"><a href="#/login">Zurück zum Login</a></p>`));
+  const form = $('#f', main);
+  form.onsubmit = (e) => {
+    e.preventDefault();
+    const f = Object.fromEntries(new FormData(form));
+    busy(e.submitter, async () => {
+      await api('POST', '/api/forgot', f);
+      set(form, html`<div class="center"><div style="font-size:46px">📬</div><h2>Check deine Mails!</h2>
+        <p>Falls es ein Konto mit <b>${f.email}</b> gibt, ist jetzt ein Link unterwegs. Er ist 2 Stunden gültig.</p>
+        <p class="small muted" style="margin:0">Nichts bekommen? Schau im Spam-Ordner nach.</p></div>`);
+    });
+  };
+}
+
+async function viewReset(main, { query }) {
+  set(main, authPage(html`
+    <form class="card" id="f">
+      <h2>Neues Passwort</h2>
+      <label class="field"><span>Neues Passwort (mind. 8 Zeichen)</span><input class="input" name="password" type="password" minlength="8" required autocomplete="new-password"></label>
+      <label class="row small" style="margin:-4px 0 14px"><input type="checkbox" data-show> Passwort anzeigen</label>
+      <button class="btn primary block big">Speichern</button>
+    </form>`));
+  const form = $('#f', main);
+  const pw = form.elements.namedItem('password');
+  $('[data-show]', main).onchange = (e) => { pw.type = e.target.checked ? 'text' : 'password'; };
+  form.onsubmit = (e) => {
+    e.preventDefault();
+    busy(e.submitter, async () => {
+      await api('POST', '/api/reset', { token: query.get('token') || '', password: pw.value });
+      await afterLogin();
+      toast('Passwort geändert ✔', 'ok');
+    });
+  };
+}
+
+const inviteLink = (g) => `${location.origin}/einladung/${g.code}`;
+
 function showGroupCode() {
-  const g = S.me.group;
+  const g = S.me?.group;
   if (!g) return;
   const m = modal(html`
-    <h2>Smallgroup erstellt 🎉</h2>
-    <p>Teile diesen Code mit deiner Smallgroup, damit alle beitreten können:</p>
-    <div class="card center" style="margin:12px 0"><div class="join-code">${g.code}</div></div>
-    <div class="row"><button class="btn primary grow" data-share>Code teilen</button><button class="btn grow" data-close>Fertig</button></div>`);
+    <h2>Smallgroup «${g.name}» ist bereit 🎉</h2>
+    <p>Lade jetzt deine Smallgroup ein: Wer den Link öffnet und sich registriert, landet direkt in eurer Gruppe.</p>
+    <div class="card center" style="margin:12px 0"><div class="small muted">Code (falls jemand ihn eintippen will)</div><div class="join-code">${g.code}</div></div>
+    <div class="row"><button class="btn primary grow" data-share>📨 Einladen</button><button class="btn grow" data-close>Später</button></div>`);
   $('[data-share]', m).onclick = () => shareCode(g);
 }
 async function shareCode(g) {
-  const text = `Tritt unserer Smallgroup "${g.name}" in der Jesus First App bei – Code: ${g.code}\n${location.origin}`;
+  const link = inviteLink(g);
+  const text = `Tritt unserer Smallgroup «${g.name}» in der Jesus First Camp App bei 🙌`;
   try {
-    if (navigator.share) await navigator.share({ text });
-    else { await navigator.clipboard.writeText(text); toast('Code kopiert ✔', 'ok'); }
-  } catch {}
+    if (navigator.share) await navigator.share({ title: 'Jesus First Camp', text, url: link });
+    else { await navigator.clipboard.writeText(`${text}\n${link}`); toast('Einladungslink kopiert ✔', 'ok'); }
+  } catch (e) {
+    if (e?.name !== 'AbortError') prompt('Einladungslink kopieren:', link);
+  }
 }
 
 /* =========================================================
@@ -318,8 +496,8 @@ async function shareCode(g) {
    ========================================================= */
 async function viewHome(main) {
   async function load() {
-    const [me, lb, challenges] = await Promise.all([api('GET', '/api/me'), api('GET', '/api/leaderboard'), api('GET', '/api/challenges')]);
-    S.me = me;
+    const [me, lb, challenges, gallery] = await Promise.all([refreshMe(), api('GET', '/api/leaderboard'), api('GET', '/api/challenges'), api('GET', '/api/gallery?limit=4')]);
+    if (!me) return go('/login');
     const g = me.group;
     const rankIdx = g ? lb.groups.findIndex((x) => x.id === g.id) : -1;
     const myRow = rankIdx >= 0 ? lb.groups[rankIdx] : null;
@@ -340,7 +518,9 @@ async function viewHome(main) {
         <div class="card section">
           <div class="row between"><h3 style="margin:0">👥 ${g.name}</h3><button class="btn sm ghost" data-switch>Wechseln</button></div>
           <div class="chips" style="margin:12px 0">${g.members.map((m) => html`<span class="chip ${m.id === me.user.id ? 'me' : ''}">${m.name}</span>`)}</div>
-          <div class="row between"><div><div class="small muted">Code zum Beitreten</div><div class="join-code">${g.code}</div></div><button class="btn sm" data-share>Teilen</button></div>
+          ${g.members.length <= 1 ? html`<p class="small muted">Noch bist du allein – lade deine Smallgroup ein!</p>` : ''}
+          <div class="row between"><div><div class="small muted">Code</div><div class="join-code">${g.code}</div></div>
+            <button class="btn ${g.members.length <= 1 ? 'primary' : ''}" data-share>📨 Einladen</button></div>
         </div>`
       : html`
         <form class="card section" id="gf">
@@ -356,6 +536,12 @@ async function viewHome(main) {
           <div class="ch-list" style="margin-top:10px">
             ${open.length ? open.slice(0, 3).map(challengeItem) : html`<div class="card empty">Alles erledigt – stark! 💪</div>`}
           </div>
+        </div>` : ''}
+
+      ${gallery.photos.length ? html`
+        <div class="section">
+          <div class="row between" style="margin-bottom:10px"><h3 style="margin:0">📷 Neueste Fotos</h3><a href="#/galerie" class="small">Galerie →</a></div>
+          <div class="strip">${gallery.photos.map((p) => html`<a href="#/galerie"><img src="${p.thumb}" alt="" loading="lazy"></a>`)}</div>
         </div>` : ''}`);
 
     $('[data-share]', main)?.addEventListener('click', () => shareCode(g));
@@ -368,7 +554,7 @@ async function viewHome(main) {
         busy(e.submitter, async () => {
           const f = Object.fromEntries(new FormData(gf));
           await api('POST', '/api/me/group', f);
-          S.me = await api('GET', '/api/me');
+          await refreshMe();
           if (f.groupMode === 'create') showGroupCode();
           route();
         });
@@ -377,7 +563,7 @@ async function viewHome(main) {
   }
   await load();
   return {
-    onRefresh: (t) => ['points', 'groups', 'challenges'].includes(t) && load().catch(() => {}),
+    onRefresh: (t) => ['points', 'groups', 'challenges', 'gallery'].includes(t) && load().catch(() => {}),
     onGame: () => { if (!!S.game?.game !== !!$('.live-banner', main)) load().catch(() => {}); },
   };
 }
@@ -397,7 +583,7 @@ function switchGroupModal() {
     busy(e.submitter, async () => {
       const data = Object.fromEntries(new FormData(f));
       await api('POST', '/api/me/group', data);
-      S.me = await api('GET', '/api/me');
+      await refreshMe();
       m.remove();
       if (data.groupMode === 'create') showGroupCode();
       route();
@@ -422,7 +608,7 @@ function challengeStatus(c) {
 function challengeItem(c) {
   return html`
     <a class="card ch-item" href="#/challenges/${c.id}">
-      <div class="ch-thumb" style="${c.image ? `background-image:url('${c.image}')` : ''}">${c.image ? '' : '📸'}</div>
+      <div class="ch-thumb" style="${c.thumb ? `background-image:url('${c.thumb}')` : ''}">${c.thumb ? '' : '📸'}</div>
       <div class="grow">
         <h3>${c.title}</h3>
         <div class="row" style="gap:6px">
@@ -440,6 +626,7 @@ async function viewChallenges(main) {
     set(main, html`
       <div class="row between" style="margin-bottom:14px"><h1 style="margin:0">Challenges</h1>
         ${isAdmin() ? html`<a class="btn primary sm" href="#/admin/challenge/neu">+ Neue Challenge</a>` : ''}</div>
+      ${chTabs('c')}
       <div class="ch-list">
         ${list.length ? list.map(challengeItem) : html`<div class="card empty"><div class="big">📸</div>Noch keine Challenges – bald geht's los!</div>`}
       </div>`);
@@ -448,10 +635,57 @@ async function viewChallenges(main) {
   return { onRefresh: (t) => ['challenges', 'submissions', 'points'].includes(t) && load().catch(() => {}) };
 }
 
+const chTabs = (active) => html`<div class="seg"><a href="#/challenges" class="${active === 'c' ? 'on' : ''}">📸 Challenges</a><a href="#/galerie" class="${active === 'g' ? 'on' : ''}">🖼️ Galerie</a></div>`;
+
+async function viewGallery(main) {
+  let filter = 0;
+  let photos = [];
+  let more = false;
+  let challenges = [];
+  async function load(reset = true) {
+    const q = new URLSearchParams({ limit: 60 });
+    if (filter) q.set('challenge', filter);
+    if (!reset && photos.length) q.set('before', photos[photos.length - 1].id);
+    const res = await api('GET', `/api/gallery?${q}`);
+    if (res.challenges) challenges = res.challenges;
+    photos = reset ? res.photos : photos.concat(res.photos);
+    more = res.more;
+    render();
+  }
+  function render() {
+    const total = challenges.reduce((n, c) => n + c.count, 0);
+    set(main, html`
+      <h1>Galerie</h1>
+      ${chTabs('g')}
+      ${challenges.length > 1 ? html`<div class="chips scroll" style="margin-bottom:12px">
+        <button class="chip ${!filter ? 'on' : ''}" data-f="0">Alle · ${total}</button>
+        ${challenges.map((c) => html`<button class="chip ${filter === c.id ? 'on' : ''}" data-f="${c.id}">${c.title} · ${c.count}</button>`)}
+      </div>` : ''}
+      ${photos.length ? html`
+        <div class="photos gallery" data-lb>${photos.map((p) => html`
+          <div class="photo"><img src="${p.thumb}" data-full="${p.url}" data-cap="${p.groupName}" data-sub="${p.challengeTitle}${p.by ? ` · von ${p.by}` : ''}" data-photo-id="${p.id}" loading="lazy" alt="">
+            <span class="by"><b>${p.groupName}</b></span></div>`)}</div>
+        ${more ? html`<button class="btn block section" data-more>Mehr laden</button>` : ''}`
+      : html`<div class="card empty"><div class="big">🖼️</div>Noch keine Fotos.<br>Ladet bei den Challenges eure Bilder hoch – sie erscheinen dann hier für alle.</div>`}`);
+    $$('[data-f]', main).forEach((b) => (b.onclick = () => { filter = Number(b.dataset.f); load().catch(fail); }));
+    const m = $('[data-more]', main);
+    if (m) m.onclick = () => busy(m, () => load(false));
+  }
+  await load();
+  let t;
+  return {
+    onRefresh: (topic) => {
+      if (topic !== 'gallery' || $('.lightbox')) return;
+      clearTimeout(t);
+      t = setTimeout(() => load().catch(() => {}), 800);
+    },
+  };
+}
+
 function photoGrid(photos, { canDelete = false } = {}) {
   if (!photos?.length) return '';
-  return html`<div class="photos">${photos.map((p) => html`
-    <div class="photo"><img src="${p.url}" data-full="${p.url}" loading="lazy" alt="">
+  return html`<div class="photos" data-lb>${photos.map((p) => html`
+    <div class="photo"><img src="${p.thumb || p.url}" data-full="${p.url}" data-cap="${p.by || ''}" loading="lazy" alt="">
       ${p.by ? html`<span class="by">${p.by}</span>` : ''}
       ${canDelete ? html`<button class="x" data-del-photo="${p.id}" aria-label="Bild löschen">✕</button>` : ''}</div>`)}</div>`;
 }
@@ -545,7 +779,10 @@ async function viewChallenge(main, { id }) {
       try {
         status.textContent = `Bereite ${plural(files.length, 'Bild', 'Bilder')} vor…`;
         const fd = new FormData();
-        for (const f of files) fd.append('photos', await shrinkImage(f));
+        for (const f of files) {
+          fd.append('photos', await shrinkImage(f));
+          fd.append('thumbs', await shrinkImage(f, 480, 0.75));
+        }
         status.textContent = 'Lade hoch…';
         await api('POST', `/api/challenges/${id}/photos`, fd);
         toast('Hochgeladen 🎉', 'ok');
@@ -625,6 +862,7 @@ async function viewAdmin(main) {
       <a class="card tile" href="#/admin/punkte"><span class="ic">⭐</span><b>Bonuspunkte</b><span class="muted">Zusatz-Challenges & Korrekturen</span></a>
       <a class="card tile" href="#/admin/gruppen"><span class="ic">👥</span><b>Smallgroups</b><span class="muted">${plural(groups.groups.length, 'Gruppe', 'Gruppen')} · ${plural(users, 'Person', 'Personen')}</span></a>
       <a class="card tile" href="#/beamer" target="_blank"><span class="ic">📽️</span><b>Beamer-Ansicht</b><span class="muted">Für die Leinwand in der Halle</span></a>
+      <a class="card tile" href="#/galerie"><span class="ic">🖼️</span><b>Galerie</b><span class="muted">Alle Fotos – unpassende kannst du löschen</span></a>
     </div>
     <div class="section card">
       <h3>Tipps</h3>
@@ -667,7 +905,10 @@ async function viewChallengeEdit(main, params) {
       fd.append('published', el.namedItem('published').checked ? '1' : '0');
       if (el.namedItem('removeImage')?.checked) fd.append('removeImage', '1');
       const img = el.namedItem('image').files[0];
-      if (img) fd.append('image', await shrinkImage(img, 1800));
+      if (img) {
+        fd.append('image', await shrinkImage(img, 1800));
+        fd.append('thumb', await shrinkImage(img, 320, 0.75));
+      }
       const res = await api(editing ? 'PUT' : 'POST', editing ? `/api/admin/challenges/${params.id}` : '/api/admin/challenges', fd);
       toast(editing ? 'Gespeichert ✔' : 'Challenge erstellt 🎉', 'ok');
       go(`/challenges/${editing ? params.id : res.id}`);
@@ -753,15 +994,22 @@ async function viewPoints(main) {
 async function viewGroups(main) {
   const open = new Set();
   async function load() {
-    const { groups, loose } = await api('GET', '/api/admin/groups');
+    const { groups, loose, mailConfigured } = await api('GET', '/api/admin/groups');
+    const pending = [...groups.flatMap((g) => g.users.map((u) => ({ ...u, gid: g.id }))), ...loose.filter((u) => u.role === 'user').map((u) => ({ ...u, gid: null }))]
+      .filter((u) => !u.verified);
     const options = (sel) => html`<option value="">– keine –</option>${groups.map((g) => html`<option value="${g.id}" ${g.id === sel ? 'selected' : ''}>${g.name}</option>`)}`;
     const member = (u, gid) => html`
-      <div class="member"><div class="grow"><b>${u.name}</b> <span class="muted small">@${u.username}</span></div>
+      <div class="member"><div class="who"><b>${u.name}</b> ${u.verified ? '' : html`<span class="badge warn">nicht bestätigt</span>`}<span class="muted small">${u.email}</span></div>
+        ${u.verified ? '' : html`<button class="btn sm" data-verify="${u.id}" title="E-Mail manuell bestätigen">✔︎ Freischalten</button>`}
         <select class="input" data-move="${u.id}">${options(gid)}</select>
         <button class="btn sm ghost" data-pw="${u.id}" title="Passwort zurücksetzen">🔑</button>
         <button class="btn sm ghost" data-deluser="${u.id}" title="Konto löschen">🗑️</button></div>`;
     set(main, html`
       <h1>Smallgroups</h1>
+      ${!mailConfigured && S.config.emailVerification ? html`<div class="notice error" style="margin-bottom:14px">⚠️ Der Mailversand ist noch nicht eingerichtet (SMTP). Neue Konten bekommen keine Bestätigungs-Mail – schalte sie hier mit «Freischalten» frei.</div>` : ''}
+      ${pending.length ? html`<div class="card" style="margin-bottom:14px"><h3>Warten auf Bestätigung (${pending.length})</h3>
+        <p class="small muted" style="margin:0 0 4px">Diese Personen haben ihre E-Mail noch nicht bestätigt. Wenn die Mail nicht ankommt, kannst du sie hier freischalten.</p>
+        ${pending.map((u) => member(u, u.gid))}</div>` : ''}
       <form class="card row" id="nf"><input class="input grow" name="name" placeholder="Neue Smallgroup (optional vorab erstellen)" maxlength="40" required><button class="btn primary">Erstellen</button></form>
       <div class="section">
         ${groups.map((g) => html`
@@ -780,9 +1028,14 @@ async function viewGroups(main) {
     $('#nf', main).onsubmit = (e) => { e.preventDefault(); busy(e.submitter, async () => { await api('POST', '/api/admin/groups', { name: e.target.elements.namedItem('name').value }); await load(); }); };
     $$('[data-move]', main).forEach((s) => (s.onchange = () => busy(null, async () => { await api('PUT', `/api/admin/users/${s.dataset.move}`, { groupId: s.value || null }); toast('Verschoben ✔', 'ok'); await load(); })));
     $$('[data-pw]', main).forEach((b) => (b.onclick = () => {
-      const pw = prompt('Neues Passwort (mind. 6 Zeichen):');
+      const pw = prompt('Neues Passwort (mind. 8 Zeichen):');
       if (pw) busy(b, async () => { await api('PUT', `/api/admin/users/${b.dataset.pw}`, { password: pw }); toast('Passwort geändert ✔', 'ok'); });
     }));
+    $$('[data-verify]', main).forEach((b) => (b.onclick = () => busy(b, async () => {
+      await api('PUT', `/api/admin/users/${b.dataset.verify}`, { verified: true });
+      toast('Freigeschaltet ✔', 'ok');
+      await load();
+    })));
     $$('[data-deluser]', main).forEach((b) => (b.onclick = () => {
       if (confirm('Konto löschen? Die Punkte der Smallgroup bleiben.')) busy(b, async () => { await api('DELETE', `/api/admin/users/${b.dataset.deluser}`); await load(); });
     }));
@@ -1134,7 +1387,7 @@ async function viewBeamer(main) {
     if (t && r.endsAt) t.textContent = fmtTimer(r.endsAt - now());
   }, 120);
 
-  const top = (right = '') => html`<div class="b-top"><span>JESUS <b>FIRST</b></span><span>${right}</span></div>`;
+  const top = (right = '') => html`<div class="b-top"><span class="brandline"><img src="/logo-96.png" alt="">Jesus First Camp</span><span>${right}</span></div>`;
 
   function update(s) {
     if (!s) return;
@@ -1148,7 +1401,7 @@ async function viewBeamer(main) {
       body = lb && !lb.hidden && lb.groups.length ? html`
         <div class="b-main"><div><h1 style="margin-bottom:4vh">Rangliste</h1>
           <div class="b-lb">${lb.groups.slice(0, 8).map((x, i) => html`<div class="r"><b>${medal(i)}</b><span style="text-align:left">${x.name}</span><b>${x.total}</b></div>`)}</div></div></div>`
-        : html`<div class="b-main"><div><h1>Jesus <span style="color:var(--accent)">First</span></h1><div class="b-sub">Camp 26/27 · ICF Youth Zürich</div></div></div>`;
+        : html`<div class="b-main"><div><img class="b-logo" src="/logo.png" alt=""><h1>Jesus First Camp</h1><div class="b-sub">ICF Youth Zürich · 26/27</div></div></div>`;
     } else if (!r || r.phase === 'scored') {
       const ranking = s.groups.map((x) => ({ ...x, total: s.totals[x.id] || 0 })).sort((a, b) => b.total - a.total);
       body = r ? html`
@@ -1159,7 +1412,7 @@ async function viewBeamer(main) {
     } else if (r.phase === 'countdown') {
       body = html`<div class="b-main">${stageHtml()}</div>`;
     } else if (r.phase === 'playing') {
-      body = html`<div class="b-main"><div class="b-play"><div class="letter">${r.letter}</div>
+      body = html`<div class="b-main"><div class="b-play"><div class="bigletter">${r.letter}</div>
         <div style="text-align:left"><div class="b-sub" style="margin:0 0 2vh">Wer drückt zuerst STOPP? <span data-timer style="color:var(--text)">${r.endsAt ? fmtTimer(r.endsAt - now()) : ''}</span></div>${progressHtml(s)}</div></div></div>`;
     } else {
       body = html`<div class="b-main" style="place-items:start center"><div style="width:100%">
@@ -1184,7 +1437,7 @@ async function viewBeamer(main) {
    ========================================================= */
 async function boot() {
   try { S.config = await api('GET', '/api/config'); } catch (e) { set($('#app'), html`<div class="empty">Server nicht erreichbar 😕<br>${e.message}</div>`); return; }
-  try { S.me = await api('GET', '/api/me'); } catch { S.me = null; }
+  try { await refreshMe(); } catch { S.me = null; }
   if (S.me) connectSocket();
   window.addEventListener('hashchange', route);
   route();

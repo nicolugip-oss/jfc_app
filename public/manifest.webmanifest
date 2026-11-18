@@ -1,15 +1,14 @@
 {
   "name": "Jesus First Camp",
-  "short_name": "Jesus First",
-  "description": "Smallgroup-Challenges & Stadt Land Youth – ICF Youth Zürich",
+  "short_name": "JFC",
+  "description": "Smallgroup-Challenges, Galerie & Stadt Land Youth – ICF Youth Zürich",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0b0b0c",
-  "theme_color": "#0b0b0c",
+  "background_color": "#000000",
+  "theme_color": "#000000",
   "lang": "de-CH",
   "icons": [
-    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" },
-    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml" }
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
   ]
 }
