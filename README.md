@@ -4,6 +4,21 @@ Web-App für das **Jesus First Camp 26/27** (ICF Youth Zürich): Smallgroup-Chal
 
 Die App läuft im Browser, und man kann sie auf den Homescreen legen (iPhone: Teilen → „Zum Home-Bildschirm“). Es gibt keinen App Store.
 
+## Demo zum Ausprobieren
+
+**https://nicolugip-oss.github.io/jfc_app/**
+
+Die Demo läuft auf GitHub Pages, und zwar komplett im Browser:
+- Der Server-Code läuft direkt auf dem Handy, SQLite als WebAssembly.
+- Die Daten bleiben auf dem Gerät. Mails werden keine verschickt.
+- Zwei Bot-Smallgroups spielen Stadt Land Youth mit, damit man das Spiel auch allein testen kann.
+- Über den Knopf **DEMO** oben rechts wechselt man zwischen Admin- und Teilnehmer-Ansicht.
+- Logins: `lea@demo.ch` / `demo1234`, Admin: `admin` / `admin`
+
+Die Demo wird bei jedem Push auf `main` automatisch neu gebaut (`.github/workflows/pages.yml`). Lokal baut man sie mit `npm run build:pages`, das Ergebnis liegt dann in `_site/`. Der Code dafür liegt in `demo/`: Dort werden Datenbank, Express, Uploads und Socket.IO für den Browser ersetzt.
+
+Für das echte Camp, mit allen Handys live verbunden und mit Mails, braucht es den Server, siehe unten.
+
 ## Funktionen
 
 **Für alle**

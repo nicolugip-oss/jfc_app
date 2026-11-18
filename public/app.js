@@ -17,11 +17,21 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const set = (el, content) => { if (el) el.innerHTML = out(content); };
 const go = (path) => { if (location.hash !== '#' + path) location.hash = path; else route(); };
 
-const S = { me: null, config: null, game: null, offset: 0, socket: null, view: null, routeId: 0 };
+const S = { me: null, config: null, game: null, offset: 0, socket: null, view: null, routeId: 0, demo: null };
+// Demo-Version (GitHub Pages): Server läuft im Browser, siehe demo/main.js
+const DEMO = !!window.JFC_DEMO;
 const now = () => Date.now() + S.offset;
 const isAdmin = () => S.me?.user.role === 'admin';
 
 async function api(method, url, body) {
+  if (S.demo) {
+    try {
+      return await S.demo.api(method, url, body);
+    } catch (e) {
+      if (e.status === 401 && S.me && !url.endsWith('/login')) { S.me = null; go('/login'); }
+      throw e;
+    }
+  }
   const opts = { method, headers: {}, credentials: 'same-origin' };
   if (body instanceof FormData) opts.body = body;
   else if (body !== undefined) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
@@ -213,10 +223,10 @@ function shell(r) {
   ];
   app.innerHTML = out(html`
     <header class="topbar">
-      <a class="logo" href="#/"><img src="/logo-96.png" alt="JFC"><span>Jesus First Camp</span></a>
+      <a class="logo" href="#/"><img src="logo-96.png" alt="JFC"><span>Jesus First Camp</span></a>
       <div class="grow"></div>
       <span class="group-chip">${isAdmin() ? '🛠️ Admin' : S.me.group ? `👥 ${S.me.group.name}` : 'Keine Smallgroup'}</span>
-      <span class="conn ${S.socket?.connected ? '' : 'off'}" id="conn" title="Live-Verbindung"></span>
+      ${DEMO ? html`<button class="demo-chip" data-demo-menu>DEMO</button>` : html`<span class="conn ${S.socket?.connected ? '' : 'off'}" id="conn" title="Live-Verbindung"></span>`}
     </header>
     <main id="main"></main>
     <nav class="tabbar">
@@ -240,7 +250,7 @@ function updateLiveDot() {
    ========================================================= */
 function connectSocket() {
   if (S.socket) return;
-  S.socket = io({ transports: ['websocket', 'polling'] });
+  S.socket = S.demo ? S.demo.socket() : io({ transports: ['websocket', 'polling'] });
   const conn = (on) => $('#conn')?.classList.toggle('off', !on);
   S.socket.on('connect', () => conn(true));
   S.socket.on('disconnect', () => conn(false));
@@ -268,7 +278,7 @@ function disconnectSocket() {
    Login & Registrierung
    ========================================================= */
 const brandHtml = () => html`
-  <div class="brand"><img src="/logo.png" alt="JFC Logo"><div><b>Jesus<br>First Camp</b><small>ICF Youth Zürich · 26/27</small></div></div>`;
+  <div class="brand"><img src="logo.png" alt="JFC Logo"><div><b>Jesus<br>First Camp</b><small>ICF Youth Zürich · 26/27</small></div></div>`;
 const authPage = (content) => html`<div class="auth-wrap"><div class="auth">${brandHtml()}${content}</div></div>`;
 
 async function refreshMe() {
@@ -287,7 +297,15 @@ async function viewLogin(main) {
       <button class="btn primary block big">Los geht's</button>
       <p class="center small" style="margin:14px 0 0"><a href="#/passwort-vergessen">Passwort vergessen?</a></p>
     </form>
-    <p class="center muted" style="margin-top:18px">Noch kein Konto? <a href="#/registrieren">Jetzt registrieren</a></p>`));
+    <p class="center muted" style="margin-top:18px">Noch kein Konto? <a href="#/registrieren">Jetzt registrieren</a></p>
+    ${DEMO ? html`
+      <div class="card demo-card section">
+        <h3>🧪 Demo-Version</h3>
+        <p class="small muted">Alles läuft nur auf diesem Handy – keine echten Daten, keine Mails. Zwei Bot-Smallgroups spielen mit.</p>
+        <div class="row"><button class="btn primary grow" data-demo-as="user">Als Teilnehmer:in</button><button class="btn grow" data-demo-as="admin">Als Admin</button></div>
+        <p class="small muted" style="margin:10px 0 0">Logins: <b>lea@demo.ch</b> / demo1234 · Admin: <b>admin</b> / admin. Oder oben neu registrieren (ohne Mail-Bestätigung).</p>
+      </div>` : ''}`));
+  $$('[data-demo-as]', main).forEach((b) => (b.onclick = () => demoSwitch(b.dataset.demoAs)));
   const form = $('#f', main);
   form.onsubmit = (e) => {
     e.preventDefault();
@@ -468,7 +486,7 @@ async function viewReset(main, { query }) {
   };
 }
 
-const inviteLink = (g) => `${location.origin}/einladung/${g.code}`;
+const inviteLink = (g) => (DEMO ? `${location.href.split('#')[0]}#/registrieren?code=${g.code}` : `${location.origin}/einladung/${g.code}`);
 
 function showGroupCode() {
   const g = S.me?.group;
@@ -542,7 +560,10 @@ async function viewHome(main) {
         <div class="section">
           <div class="row between" style="margin-bottom:10px"><h3 style="margin:0">📷 Neueste Fotos</h3><a href="#/galerie" class="small">Galerie →</a></div>
           <div class="strip">${gallery.photos.map((p) => html`<a href="#/galerie"><img src="${p.thumb}" alt="" loading="lazy"></a>`)}</div>
-        </div>` : ''}`);
+        </div>` : ''}
+
+      <button class="btn ghost block section" data-logout>Ausloggen</button>`);
+    $('[data-logout]', main)?.addEventListener('click', logout);
 
     $('[data-share]', main)?.addEventListener('click', () => shareCode(g));
     $('[data-switch]', main)?.addEventListener('click', switchGroupModal);
@@ -1190,6 +1211,7 @@ async function viewGame(main) {
 
   // ---------- Teile, die sich laufend ändern ----------
   function renderParts(s) {
+    set($('[data-part=groupcount]', main), s.game ? `(${s.groups.length})` : '');
     set($('[data-part=groups]', main), s.game ? (s.groups.length ? html`<div class="chips">${s.groups.map((g) => html`<span class="chip ${g.id === s.myGroupId ? 'me' : ''}">${g.name}${s.isAdmin ? html` <button class="btn sm ghost" style="min-height:20px;padding:0 4px" data-kick="${g.id}" title="Entfernen">✕</button>` : ''}</span>`)}</div>` : html`<p class="muted small" style="margin:0">Noch niemand dabei …</p>`) : '');
     set($('[data-part=progress]', main), s.game && s.progress ? progressHtml(s) : '');
     set($('[data-part=totals]', main), s.game ? totalsHtml(s) : '');
@@ -1253,6 +1275,9 @@ async function viewGame(main) {
     const r = s.round;
     if (!g) return s.isAdmin ? createGameHtml() : html`
       <h1>Stadt Land Youth</h1>
+      ${DEMO ? html`<div class="demobar stack" style="margin-bottom:14px"><b>🧪 Demo</b>
+        <p class="small muted" style="margin:0">Im Camp eröffnet der Admin das Spiel. Hier kannst du es selbst starten – zwei Bot-Smallgroups spielen gegen dich.</p>
+        <button class="btn primary block big" data-demo-game>Spiel gegen Bots starten</button></div>` : ''}
       <div class="card empty"><div class="big">🔤</div>Gerade läuft kein Spiel.<br>Sobald es losgeht, erscheint es hier – mit einem roten Punkt unten.</div>
       <div class="card section"><h3>So geht's</h3>
         <p class="small muted" style="margin:0">1. Eine Person eurer Smallgroup tritt dem Spiel bei – dann seid ihr alle dabei.<br>2. Ein zufälliger Buchstabe erscheint, dann zählt es von 5 runter.<br>3. Füllt alle Kategorien aus – ihr könnt zusammen auf mehreren Handys tippen.<br>4. Die erste Gruppe, die fertig ist, drückt STOPP – dann ist für alle Schluss!</p></div>`;
@@ -1261,7 +1286,7 @@ async function viewGame(main) {
     const joinBtn = !s.joined && !s.isAdmin
       ? (s.myGroupId ? html`<button class="btn primary block big" data-join>✋ Mit meiner Smallgroup beitreten</button>` : html`<div class="card muted">Tritt zuerst auf der Home-Seite einer Smallgroup bei.</div>`)
       : '';
-    const groupsCard = html`<div class="card section"><h3>Dabei (${s.groups.length})</h3><div data-part="groups"></div></div>`;
+    const groupsCard = html`<div class="card section"><h3>Dabei <span data-part="groupcount"></span></h3><div data-part="groups"></div></div>`;
     const phase = r?.phase;
 
     // Lobby / zwischen den Runden
@@ -1272,6 +1297,8 @@ async function viewGame(main) {
             <div class="row"><button class="btn sm grow" data-finish>Spiel beenden</button>${r ? html`<button class="btn sm grow" data-discard>Letzte Runde verwerfen</button>` : ''}</div>
           </div>`
           : s.joined ? html`<div class="card accent center"><b>Ihr seid dabei! ✅</b><div class="small muted">${r ? 'Nächste Runde startet gleich …' : 'Wartet, bis die Runde startet.'}</div></div>` : joinBtn}
+        ${DEMO && !s.isAdmin && s.joined ? html`<div class="demobar section"><button class="btn primary block big" data-demo-round>▶ Demo: Runde ${(r?.no || 0) + 1} starten</button>
+          <p class="small muted" style="margin:8px 0 0">Im Camp startet der Admin die Runden – für alle gleichzeitig.</p></div>` : ''}
         ${r ? html`<div class="card section"><h3>Resultat Runde ${r.no} · ${r.letter}</h3><div class="small muted" style="margin-bottom:10px">${stopperText(r)}</div><div data-part="reveal"></div></div>` : ''}
         <div data-part="totals"></div>
         ${groupsCard}
@@ -1305,7 +1332,9 @@ async function viewGame(main) {
     return html`${head}
       <div class="stopped-banner"><b>STOPP!</b>${stopperText(r)}</div>
       ${s.isAdmin ? html`<div class="row" style="margin-bottom:12px"><span class="grow small muted">Buchstabe <b style="color:var(--accent)">${r.letter}</b></span><button class="btn sm ghost" data-discard>Runde verwerfen</button></div>`
-        : html`<p class="muted center small">Die Leiter werten jetzt aus … 🤔</p>`}
+        : html`<p class="muted center small">Die Leiter werten jetzt aus … 🤔</p>
+          ${DEMO ? html`<div class="demobar" style="margin-bottom:14px"><button class="btn primary block" data-demo-score>Demo: Punkte automatisch vergeben</button>
+            <p class="small muted" style="margin:8px 0 0">Im Camp prüft der Admin die Antworten und vergibt die Punkte.</p></div>` : ''}`}
       <div class="card" data-part="reveal"></div>`;
   }
 
@@ -1335,6 +1364,13 @@ async function viewGame(main) {
     };
     const on = (sel, fn) => { const el = $(sel, main); if (el) el.onclick = () => busy(el, fn); };
     on('[data-join]', () => api('POST', '/api/game/join'));
+    on('[data-demo-game]', async () => {
+      const d = S.config.defaults;
+      await S.demo.adminApi('POST', '/api/admin/game', { title: 'Stadt Land Youth', categories: d.categories.join('\n'), timeLimit: 180, letters: d.letters });
+      if (S.me.group) await api('POST', '/api/game/join');
+    });
+    on('[data-demo-round]', () => S.demo.adminApi('POST', '/api/admin/game/round'));
+    on('[data-demo-score]', async () => S.demo.autoScore());
     on('[data-start]', () => api('POST', '/api/admin/game/round'));
     on('[data-forcestop]', () => api('POST', '/api/admin/game/stop'));
     const confirmOn = (sel, msg, fn) => { const el = $(sel, main); if (el) el.onclick = () => { if (confirm(msg)) busy(el, fn); }; };
@@ -1387,7 +1423,7 @@ async function viewBeamer(main) {
     if (t && r.endsAt) t.textContent = fmtTimer(r.endsAt - now());
   }, 120);
 
-  const top = (right = '') => html`<div class="b-top"><span class="brandline"><img src="/logo-96.png" alt="">Jesus First Camp</span><span>${right}</span></div>`;
+  const top = (right = '') => html`<div class="b-top"><span class="brandline"><img src="logo-96.png" alt="">Jesus First Camp</span><span>${right}</span></div>`;
 
   function update(s) {
     if (!s) return;
@@ -1401,7 +1437,7 @@ async function viewBeamer(main) {
       body = lb && !lb.hidden && lb.groups.length ? html`
         <div class="b-main"><div><h1 style="margin-bottom:4vh">Rangliste</h1>
           <div class="b-lb">${lb.groups.slice(0, 8).map((x, i) => html`<div class="r"><b>${medal(i)}</b><span style="text-align:left">${x.name}</span><b>${x.total}</b></div>`)}</div></div></div>`
-        : html`<div class="b-main"><div><img class="b-logo" src="/logo.png" alt=""><h1>Jesus First Camp</h1><div class="b-sub">ICF Youth Zürich · 26/27</div></div></div>`;
+        : html`<div class="b-main"><div><img class="b-logo" src="logo.png" alt=""><h1>Jesus First Camp</h1><div class="b-sub">ICF Youth Zürich · 26/27</div></div></div>`;
     } else if (!r || r.phase === 'scored') {
       const ranking = s.groups.map((x) => ({ ...x, total: s.totals[x.id] || 0 })).sort((a, b) => b.total - a.total);
       body = r ? html`
@@ -1435,7 +1471,45 @@ async function viewBeamer(main) {
 /* =========================================================
    Start
    ========================================================= */
+// ---------- Demo-Menü ----------
+async function demoSwitch(role) {
+  try {
+    S.demo.switchTo(role);
+    await afterLogin();
+    toast(role === 'admin' ? 'Du bist jetzt Admin 🛠️' : 'Du bist jetzt Teilnehmer:in 👋', 'ok');
+  } catch (e) { fail(e); }
+}
+function demoMenu() {
+  const m = modal(html`
+    <h2>🧪 Demo-Version</h2>
+    <p class="small muted">Diese Testversion läuft komplett auf deinem Handy: Die Daten siehst nur du, Mails werden keine verschickt. Zwei Bot-Smallgroups spielen Stadt Land Youth mit.</p>
+    <div class="stack">
+      <button class="btn block ${isAdmin() ? '' : 'primary'}" data-sw="admin">🛠️ Zur Admin-Ansicht</button>
+      <button class="btn block ${isAdmin() ? 'primary' : ''}" data-sw="user">👋 Zur Teilnehmer-Ansicht</button>
+      <button class="btn block danger" data-reset>Demo zurücksetzen</button>
+      <button class="btn block ghost" data-close>Schliessen</button>
+    </div>`);
+  $$('[data-sw]', m).forEach((b) => (b.onclick = () => { m.remove(); demoSwitch(b.dataset.sw); }));
+  $('[data-reset]', m).onclick = () => {
+    if (confirm('Alle Demo-Daten auf diesem Gerät löschen und neu beginnen?')) S.demo.reset();
+  };
+}
+document.addEventListener('click', (e) => { if (e.target.closest('[data-demo-menu]')) demoMenu(); });
+
 async function boot() {
+  if (DEMO) {
+    try {
+      S.demo = await import('./demo.js');
+      await S.demo.init();
+    } catch (e) {
+      console.error(e);
+      set($('#app'), html`<div class="empty">Die Demo konnte nicht starten 😕<br>${e.message}</div>`);
+      return;
+    }
+  }
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  }
   try { S.config = await api('GET', '/api/config'); } catch (e) { set($('#app'), html`<div class="empty">Server nicht erreichbar 😕<br>${e.message}</div>`); return; }
   try { await refreshMe(); } catch { S.me = null; }
   if (S.me) connectSocket();

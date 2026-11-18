@@ -123,4 +123,4 @@ export function limit(key, max, windowMs, message = 'Zu viele Versuche – warte
 setInterval(() => {
   const now = Date.now();
   for (const [k, list] of buckets) if (!list.some((t) => now - t < 3_600_000)) buckets.delete(k);
-}, 600_000).unref();
+}, 600_000).unref?.(); // unref nur in Node (im Browser-Demo gibt es das nicht)
