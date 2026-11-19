@@ -27,7 +27,8 @@ Für das echte Camp, mit allen Handys live verbunden und mit Mails, braucht es d
 - **Passwort vergessen:** Ein Link per Mail ist 2 Stunden gültig.
 - **Challenges** ansehen und **Fotos hochladen**. Die Fotos werden automatisch verkleinert, und es wird zusätzlich ein kleines Vorschaubild erstellt.
 - **Galerie** mit allen Fotos aller Smallgroups, filterbar nach Challenge. Ein Foto lässt sich gross anzeigen, und man kann durch die Fotos wischen.
-- **Live:** Lädt eine Smallgroup ein Foto hoch, sehen es alle anderen sofort. Sie bekommen einen Hinweis, und Galerie und Startseite aktualisieren sich von selbst.
+- **Schnappschüsse:** In der Galerie (oder auf der Startseite unter „Aus dem Camp“) kann man unter „Foto teilen“ auch Fotos ohne Challenge hochladen, mit Bildtext. Die eigenen kann man jederzeit wieder löschen.
+- **Live:** Lädt jemand ein Foto hoch, sehen es alle anderen sofort. Sie bekommen einen Hinweis, und Galerie und Startseite aktualisieren sich von selbst.
 - **Rangliste** mit Aufschlüsselung nach Challenges, Spiel und Bonus
 - **Stadt Land Youth** live mitspielen. Alle aus der Smallgroup können gleichzeitig auf ihren Handys mittippen.
 
@@ -37,7 +38,7 @@ Für das echte Camp, mit allen Handys live verbunden und mit Mails, braucht es d
 - **Bonuspunkte** an eine oder mehrere Smallgroups vergeben (z.B. für eine Zusatz-Challenge). Negative Punkte sind auch möglich.
 - Smallgroups verwalten: vorab erstellen, umbenennen, Leute verschieben, Passwort setzen, **Konten manuell freischalten** (falls eine Mail nicht ankommt)
 - **Fotos vom ICF Youth** in der Galerie hochladen (ohne Challenge, mit Bildtext). Sie erscheinen sofort bei allen gross auf der Startseite.
-- Unpassende Fotos direkt in der Galerie löschen
+- **Jedes Foto löschen** (Challenge-Fotos, Schnappschüsse, ICF-Fotos): in der Galerie antippen und dann „Löschen“ wählen. Das Foto verschwindet sofort bei allen.
 - Rangliste verstecken, z.B. für die grosse Auflösung am Schluss
 - Stadt Land Youth steuern (siehe unten)
 - **Beamer-Ansicht** (`/#/beamer`) für die Leinwand: Lobby, Buchstabe mit Countdown, Live-Fortschritt, STOPP, Antworten, Spielstand

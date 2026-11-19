@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS photos (
   file TEXT NOT NULL,
   created_at INTEGER NOT NULL
 );
-CREATE TABLE IF NOT EXISTS gallery_photos (   -- Fotos vom ICF-Youth-Team (ohne Challenge)
+CREATE TABLE IF NOT EXISTS gallery_photos (   -- Fotos ohne Challenge: vom ICF Youth (official=1) oder Schnappschüsse (official=0)
   id INTEGER PRIMARY KEY,
   user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
   file TEXT NOT NULL,
@@ -132,6 +132,8 @@ addColumn('users', 'verified', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('groups', 'created_by', 'INTEGER');
 addColumn('photos', 'thumb', 'TEXT');
 addColumn('challenges', 'thumb', 'TEXT');
+addColumn('gallery_photos', 'official', 'INTEGER NOT NULL DEFAULT 1');
+addColumn('gallery_photos', 'group_id', 'INTEGER REFERENCES groups(id) ON DELETE SET NULL');
 db.exec("UPDATE users SET verified = 1 WHERE role = 'admin'");
 
 const num = (v) => (typeof v === 'bigint' ? Number(v) : v);

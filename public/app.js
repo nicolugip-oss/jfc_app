@@ -87,7 +87,9 @@ document.addEventListener('click', (e) => {
   if (!img) return;
   const group = img.closest('[data-lb]');
   const imgs = group ? $$('img[data-full]', group) : [img];
-  openLightbox(imgs.map((i) => ({ full: i.dataset.full, cap: i.dataset.cap || '', sub: i.dataset.sub || '', id: i.dataset.photoId, kind: i.dataset.kind })), imgs.indexOf(img));
+  openLightbox(imgs.map((i) => ({
+    full: i.dataset.full, cap: i.dataset.cap || '', sub: i.dataset.sub || '', id: i.dataset.photoId, kind: i.dataset.kind || 'photo', mine: i.dataset.mine === '1',
+  })), imgs.indexOf(img));
 });
 
 function openLightbox(items, index) {
@@ -101,7 +103,7 @@ function openLightbox(items, index) {
       ${items.length > 1 ? html`<button class="lb-nav lb-prev" data-nav="-1" aria-label="Zurück">‹</button><button class="lb-nav lb-next" data-nav="1" aria-label="Weiter">›</button>` : ''}
       <div class="lb-bar">
         <div class="lb-cap">${it.cap ? html`<b>${it.cap}</b>` : ''}${it.sub ? html`<span class="muted small">${it.sub}</span>` : ''}${items.length > 1 ? html`<div class="muted small">${i + 1} / ${items.length}</div>` : ''}</div>
-        ${isAdmin() && it.id ? html`<button class="btn sm danger" data-lbdel>Löschen</button>` : ''}
+        ${(isAdmin() || it.mine) && it.id ? html`<button class="btn sm danger" data-lbdel>Löschen</button>` : ''}
         <button class="btn sm" data-lbclose>Schliessen</button>
       </div>`);
   };
@@ -117,9 +119,10 @@ function openLightbox(items, index) {
     if (nav) return move(Number(nav.dataset.nav));
     const del = e.target.closest('[data-lbdel]');
     if (del) {
-      if (!confirm('Dieses Foto für alle löschen?')) return;
+      if (!confirm(isAdmin() ? 'Dieses Foto für alle löschen?' : 'Dein Foto löschen?')) return;
       return busy(del, async () => {
-        await api('DELETE', items[i].kind === 'official' ? `/api/admin/gallery/${items[i].id}` : `/api/photos/${items[i].id}`);
+        // Challenge-Fotos → /api/photos, Fotos ohne Challenge (ICF Youth, Schnappschüsse) → /api/gallery
+        await api('DELETE', items[i].kind === 'photo' ? `/api/photos/${items[i].id}` : `/api/gallery/${items[i].id}`);
         toast('Foto gelöscht');
         items.splice(i, 1);
         if (!items.length) return close();
@@ -269,8 +272,10 @@ function connectSocket() {
   S.socket.on('refresh', (topic) => S.view?.onRefresh?.(topic));
   S.socket.on('photo:new', (p) => {
     if (!p?.groupName || p.userId === S.me?.user.id) return;
+    const n = p.count > 1 ? `${p.count} neue Fotos` : 'neues Foto';
     if (p.official) toast(`⭐ ${p.count > 1 ? `${p.count} neue Fotos` : 'Neues Foto'} vom ICF Youth${p.caption ? `: ${p.caption}` : ''}`);
-    else toast(`📷 ${p.groupName}: ${p.count > 1 ? `${p.count} neue Fotos` : 'neues Foto'} bei «${p.challengeTitle}»`);
+    else if (p.snapshot) toast(`📸 ${p.by}${p.groupName !== p.by ? ` (${p.groupName})` : ''} hat ${p.count > 1 ? `${p.count} Fotos` : 'ein Foto'} geteilt${p.caption ? `: ${p.caption}` : ''}`);
+    else toast(`📷 ${p.groupName}: ${n} bei «${p.challengeTitle}»`);
   });
 }
 function disconnectSocket() {
@@ -520,7 +525,7 @@ async function shareCode(g) {
 async function viewHome(main) {
   async function load() {
     const [me, lb, challenges, gallery, official] = await Promise.all([refreshMe(), api('GET', '/api/leaderboard'), api('GET', '/api/challenges'),
-      api('GET', '/api/gallery?source=groups&limit=4'), api('GET', '/api/gallery?source=official&limit=7')]);
+      api('GET', '/api/gallery?source=community&limit=6'), api('GET', '/api/gallery?source=official&limit=7')]);
     if (!me) return go('/login');
     const g = me.group;
     const rankIdx = g ? lb.groups.findIndex((x) => x.id === g.id) : -1;
@@ -579,15 +584,18 @@ async function viewHome(main) {
           </div>
         </div>` : ''}
 
-      ${gallery.photos.length ? html`
-        <div class="section">
-          <div class="row between" style="margin-bottom:10px"><h3 style="margin:0">📷 Neu von den Smallgroups</h3><a href="#/galerie" class="small">Galerie →</a></div>
-          <div class="strip">${gallery.photos.map((p) => html`<a href="#/galerie"><img src="${p.thumb}" alt="" loading="lazy"></a>`)}</div>
-        </div>` : ''}
+      <div class="section">
+        <div class="row between" style="margin-bottom:10px"><h3 style="margin:0">📷 Aus dem Camp</h3>
+          ${isAdmin() ? html`<a href="#/galerie" class="small">Galerie →</a>` : html`<button class="btn sm" data-upload-snap>📸 Foto teilen</button>`}</div>
+        ${gallery.photos.length ? html`
+          <div class="photos strip-grid" data-lb>${gallery.photos.map(galleryTile)}</div>
+          <a href="#/galerie" class="small" style="display:inline-block;margin-top:8px">Alle Fotos in der Galerie →</a>`
+        : html`<div class="card empty" style="padding:22px">Noch keine Schnappschüsse – teile den ersten! 📸</div>`}
+      </div>
 
       <button class="btn ghost block section" data-logout>Ausloggen</button>`);
     $('[data-logout]', main)?.addEventListener('click', logout);
-    $$('[data-official-upload]', main).forEach((b) => b.addEventListener('click', officialUploadModal));
+    $$('[data-official-upload], [data-upload-snap]', main).forEach((b) => b.addEventListener('click', uploadModal));
 
     $('[data-share]', main)?.addEventListener('click', () => shareCode(g));
     $('[data-switch]', main)?.addEventListener('click', switchGroupModal);
@@ -682,20 +690,25 @@ async function viewChallenges(main) {
 
 const chTabs = (active) => html`<div class="seg"><a href="#/challenges" class="${active === 'c' ? 'on' : ''}">📸 Challenges</a><a href="#/galerie" class="${active === 'g' ? 'on' : ''}">🖼️ Galerie</a></div>`;
 
-// Ein Foto-Kachel in Galerie und Startseite (Smallgroup-Foto oder Foto vom ICF Youth)
+// Ein Foto-Kachel in Galerie und Startseite. Arten: official (ICF Youth), snapshot (Schnappschuss), photo (Challenge)
+const KIND_LABEL = { official: '⭐ ICF Youth', snapshot: '📸 ' };
 const galleryTile = (p) => html`
   <div class="photo ${p.kind === 'official' ? 'official' : ''}">
-    <img src="${p.thumb}" data-full="${p.url}" data-cap="${p.groupName}" data-kind="${p.kind}" data-photo-id="${p.id}" loading="lazy" alt=""
-      data-sub="${[p.challengeTitle, p.by ? `von ${p.by}` : '', fmtDate(p.createdAt)].filter(Boolean).join(' · ')}">
-    <span class="by"><b>${p.kind === 'official' ? '⭐ ICF Youth' : p.groupName}</b></span></div>`;
+    <img src="${p.thumb}" data-full="${p.url}" data-cap="${p.kind === 'official' ? '⭐ ICF Youth' : p.groupName}" data-kind="${p.kind}" data-photo-id="${p.id}"
+      data-mine="${p.kind === 'snapshot' && p.userId === S.me?.user.id ? '1' : ''}" loading="lazy" alt=""
+      data-sub="${[p.kind === 'snapshot' ? (p.caption || 'Schnappschuss') : p.challengeTitle, p.by ? `von ${p.by}` : '', fmtDate(p.createdAt)].filter(Boolean).join(' · ')}">
+    <span class="by"><b>${p.kind === 'official' ? KIND_LABEL.official : p.kind === 'snapshot' ? KIND_LABEL.snapshot + p.groupName : p.groupName}</b></span></div>`;
 
-function officialUploadModal() {
+// Fotos teilen: Teilnehmende → Schnappschuss, Admin → Foto vom ICF Youth (entscheidet der Server)
+function uploadModal() {
+  const official = isAdmin();
   const m = modal(html`
-    <h2>📸 Fotos vom ICF Youth</h2>
-    <p class="small muted">Erscheinen sofort bei allen in der Galerie und gross auf der Startseite.</p>
+    <h2>${official ? '📸 Fotos vom ICF Youth' : '📸 Schnappschuss teilen'}</h2>
+    <p class="small muted">${official ? 'Erscheinen sofort bei allen in der Galerie und gross auf der Startseite.'
+      : 'Teile deine Camp-Momente – alle sehen sie sofort in der Galerie. Deine eigenen Fotos kannst du jederzeit wieder löschen.'}</p>
     <label class="btn block upload-btn" style="margin-bottom:12px">📷 Fotos auswählen<input type="file" accept="image/*" multiple data-files></label>
     <div class="photos" data-previews style="margin-bottom:12px"></div>
-    <label class="field"><span>Bildtext (optional)</span><input class="input" data-caption maxlength="120" placeholder="z.B. Worship Night in The Hall 🔥"></label>
+    <label class="field"><span>Bildtext (optional)</span><input class="input" data-caption maxlength="120" placeholder="${official ? 'z.B. Worship Night in The Hall 🔥' : 'z.B. Pizza-Time mit der Smallgroup 🍕'}"></label>
     <div class="row"><button class="btn primary grow" data-send disabled>Hochladen</button><button class="btn grow" data-close>Abbrechen</button></div>
     <p class="small muted center" style="margin:10px 0 0" data-status></p>`);
   const input = $('[data-files]', m);
@@ -716,52 +729,55 @@ function officialUploadModal() {
     fd.append('caption', $('[data-caption]', m).value);
     status.textContent = 'Lade hoch …';
     try {
-      await api('POST', '/api/admin/gallery', fd);
+      await api('POST', '/api/gallery', fd);
     } catch (e) { status.textContent = ''; throw e; }
     m.remove();
-    toast('Fotos sind online – alle sehen sie jetzt 🎉', 'ok');
+    toast('Geteilt – alle sehen es jetzt 🎉', 'ok');
   });
 }
 
 async function viewGallery(main) {
-  let filter = 'all'; // 'all' | 'official' | Challenge-ID
+  let filter = 'all'; // 'all' | 'official' | 'snapshots' | Challenge-ID
   let photos = [];
   let more = false;
   let challenges = [];
   let officialCount = 0;
+  let snapshotCount = 0;
   async function load(reset = true) {
     const q = new URLSearchParams({ limit: 60 });
-    if (filter === 'official') q.set('source', 'official');
+    if (filter === 'official' || filter === 'snapshots') q.set('source', filter);
     else if (filter !== 'all') q.set('challenge', filter);
     const last = photos[photos.length - 1];
     if (!reset && last) q.set('before', `${last.createdAt}:${last.kind}:${last.id}`);
     const res = await api('GET', `/api/gallery?${q}`);
-    if (res.challenges) { challenges = res.challenges; officialCount = res.officialCount; }
+    if (res.challenges) ({ challenges, officialCount, snapshotCount } = res);
     photos = reset ? res.photos : photos.concat(res.photos);
     more = res.more;
     render();
   }
   function render() {
-    const total = challenges.reduce((n, c) => n + c.count, 0) + officialCount;
+    const total = challenges.reduce((n, c) => n + c.count, 0) + officialCount + snapshotCount;
     const chip = (key, label) => html`<button class="chip ${String(filter) === String(key) ? 'on' : ''}" data-f="${key}">${label}</button>`;
     set(main, html`
       <div class="row between" style="margin-bottom:14px"><h1 style="margin:0">Galerie</h1>
-        ${isAdmin() ? html`<button class="btn primary sm" data-official-upload>📸 Fotos hochladen</button>` : ''}</div>
+        <button class="btn primary sm" data-upload-snap>📸 ${isAdmin() ? 'ICF-Fotos hochladen' : 'Foto teilen'}</button></div>
       ${chTabs('g')}
       ${total ? html`<div class="chips scroll" style="margin-bottom:12px">
         ${chip('all', `Alle · ${total}`)}
         ${officialCount ? chip('official', `⭐ ICF Youth · ${officialCount}`) : ''}
+        ${snapshotCount ? chip('snapshots', `📸 Schnappschüsse · ${snapshotCount}`) : ''}
         ${challenges.map((c) => chip(c.id, `${c.title} · ${c.count}`))}
       </div>` : ''}
+      ${isAdmin() && photos.length ? html`<p class="small muted" style="margin:-4px 0 10px">🗑️ Foto antippen → «Löschen», um es für alle zu entfernen.</p>` : ''}
       ${photos.length ? html`
         <div class="photos gallery" data-lb>${photos.map(galleryTile)}</div>
         ${more ? html`<button class="btn block section" data-more>Mehr laden</button>` : ''}`
-      : html`<div class="card empty"><div class="big">🖼️</div>Noch keine Fotos.<br>Ladet bei den Challenges eure Bilder hoch – sie erscheinen dann hier für alle.</div>`}`);
+      : html`<div class="card empty"><div class="big">🖼️</div>Noch keine Fotos.<br>Teile einen Schnappschuss aus dem Camp oder lade bei den Challenges eure Bilder hoch – alle sehen sie hier.</div>`}`);
     $$('[data-f]', main).forEach((b) => (b.onclick = () => {
-      filter = b.dataset.f === 'all' || b.dataset.f === 'official' ? b.dataset.f : Number(b.dataset.f);
+      filter = ['all', 'official', 'snapshots'].includes(b.dataset.f) ? b.dataset.f : Number(b.dataset.f);
       load().catch(fail);
     }));
-    $('[data-official-upload]', main)?.addEventListener('click', officialUploadModal);
+    $('[data-upload-snap]', main)?.addEventListener('click', uploadModal);
     const m = $('[data-more]', main);
     if (m) m.onclick = () => busy(m, () => load(false));
   }

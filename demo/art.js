@@ -306,6 +306,45 @@ const SCENES = {
     crowd(g, r, { rows: 3, size: 125, upChance: 0.7 });
   },
 
+  // Silvester: Feuerwerk über der Menge (Schnappschuss)
+  fireworks(g, r) {
+    const sky = g.createLinearGradient(0, 0, 0, H);
+    sky.addColorStop(0, '#000');
+    sky.addColorStop(1, '#1a1a1a');
+    g.fillStyle = sky;
+    g.fillRect(0, 0, W, H);
+    for (let b = 0; b < 5; b++) {
+      const cx = 140 + r() * (W - 280);
+      const cy = 110 + r() * 300;
+      const rad = 90 + r() * 120;
+      const rays = 28 + Math.floor(r() * 16);
+      g.strokeStyle = b % 2 ? '#fff' : '#bdbdbd';
+      g.fillStyle = g.strokeStyle;
+      g.lineWidth = 3;
+      g.lineCap = 'round';
+      for (let i = 0; i < rays; i++) {
+        const a = (i / rays) * Math.PI * 2;
+        const inner = rad * (0.25 + r() * 0.15);
+        g.beginPath();
+        g.moveTo(cx + Math.cos(a) * inner, cy + Math.sin(a) * inner);
+        g.lineTo(cx + Math.cos(a) * rad, cy + Math.sin(a) * rad + rad * 0.12);
+        g.stroke();
+        g.beginPath();
+        g.arc(cx + Math.cos(a) * rad, cy + Math.sin(a) * rad + rad * 0.12, 3.5, 0, Math.PI * 2);
+        g.fill();
+      }
+    }
+    g.save();
+    g.globalCompositeOperation = 'difference';
+    g.fillStyle = '#fff';
+    g.font = 'italic 900 200px Archivo, Arial, sans-serif';
+    g.textAlign = 'center';
+    g.setTransform(1.15, 0, 0, 1, -W * 0.075, 0);
+    g.fillText('2027', W / 2, H * 0.62);
+    g.restore();
+    crowd(g, r, { rows: 2, size: 140, upChance: 0.75, fill: '#050505' });
+  },
+
   // Smallgroup-Time (ICF Youth) – von oben: Kreis um ein Licht
   smallgroup(g, r) {
     g.fillStyle = '#080808';

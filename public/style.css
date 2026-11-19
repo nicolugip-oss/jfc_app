@@ -350,3 +350,5 @@ label.upload-btn { cursor: pointer; }
 .photo.official { box-shadow: inset 0 0 0 2px #fff; }
 .photo.official img { padding: 2px; border-radius: 10px; }
 button.block-btn { width: 100%; text-align: left; cursor: pointer; font: inherit; color: inherit; }
+.strip-grid { grid-template-columns: repeat(3, 1fr); }
+.strip-grid .photo .by { font-size: 10px; }

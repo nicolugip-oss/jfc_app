@@ -8,7 +8,7 @@ import { coverFiles } from '../public/cover.js';
 import { artFiles } from './art.js';
 
 // Wird die Version erhöht, bekommen alle Demo-Geräte frische Beispieldaten
-const SEED_VERSION = 2;
+const SEED_VERSION = 3;
 
 // Einstellungen wie in der .env – im Demo ohne Mails
 globalThis.__DEMO_ENV = { EMAIL_VERIFICATION: 'off', ADMIN_USERNAME: 'admin', ADMIN_PASSWORD: 'admin', DATA_DIR: 'data' };
@@ -288,9 +288,9 @@ async function seed() {
   const lea = user(DEMO_LOGINS.user.email, 'Lea M.', g1, DEMO_LOGINS.user.password);
   user('jonas@demo.ch', 'Jonas K.', g1, secret());
   const noah = user('noah@bot.demo', 'Noah B. 🤖', g2, secret());
-  user('mia@bot.demo', 'Mia S. 🤖', g2, secret());
+  const mia = user('mia@bot.demo', 'Mia S. 🤖', g2, secret());
   const elia = user('elia@bot.demo', 'Elia K. 🤖', g3, secret());
-  user('sara@bot.demo', 'Sara W. 🤖', g3, secret());
+  const sara = user('sara@bot.demo', 'Sara W. 🤖', g3, secret());
   run('UPDATE groups SET created_by = ? WHERE id = ?', lea, g1);
   run('UPDATE groups SET created_by = ? WHERE id = ?', noah, g2);
   run('UPDATE groups SET created_by = ? WHERE id = ?', elia, g3);
@@ -335,7 +335,19 @@ async function seed() {
   ];
   for (const [i, [scene, caption, ago]] of official.entries()) {
     const img = await storeArt(scene, 100 + i);
-    run('INSERT INTO gallery_photos (user_id, file, thumb, caption, created_at) VALUES (?, ?, ?, ?, ?)', admin, img.file, img.thumb, caption, now - ago);
+    run('INSERT INTO gallery_photos (user_id, official, file, thumb, caption, created_at) VALUES (?, 1, ?, ?, ?, ?)', admin, img.file, img.thumb, caption, now - ago);
+  }
+
+  // Schnappschüsse von Teilnehmenden (ohne Challenge)
+  const snapshots = [
+    ['selfie', 'Unsere Zimmer-Crew 😄', sara, g3, 'SALZ & LICHT', 4 * H],
+    ['flashmob', 'Spontan-Worship im Foyer 🎶', mia, g2, 'DAVIDS CREW', 2.5 * H],
+    ['fireworks', 'Happy New Year! 🎆', mia, g2, 'DAVIDS CREW', 0.4 * H],
+  ];
+  for (const [i, [scene, caption, uid, gid, label, ago]] of snapshots.entries()) {
+    const img = await storeArt(scene, 200 + i, label);
+    run('INSERT INTO gallery_photos (user_id, group_id, official, file, thumb, caption, created_at) VALUES (?, ?, 0, ?, ?, ?, ?)',
+      uid, gid, img.file, img.thumb, caption, now - ago);
   }
   run(`INSERT INTO points (group_id, amount, reason, source, created_at) VALUES (?, 20, 'Zusatz-Challenge: Pünktlich beim Morgenprogramm', 'bonus', ?)`, g3, now - 3 * H);
   run(`INSERT INTO points (group_id, amount, reason, source, created_at) VALUES (?, 10, 'Bei der Abendaktion dabei', 'bonus', ?)`, g1, now - 3 * H);

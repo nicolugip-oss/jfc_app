@@ -366,32 +366,42 @@ export function apiRouter({ io, game }) {
     res.json({ ok: true });
   });
 
-  // Galerie: Fotos aller Smallgroups + Fotos vom ICF-Youth-Team, neuste zuerst.
-  //   ?source=official → nur ICF Youth, ?source=groups → nur Smallgroups, ?challenge=ID → eine Challenge
+  // Galerie: alle Fotos, neuste zuerst. Drei Arten (kind):
+  //   official = vom ICF-Youth-Team, snapshot = Schnappschuss von Teilnehmenden, photo = Challenge-Foto
+  //   ?source=all|official|snapshots|challenges|community (= Schnappschüsse + Challenge-Fotos), ?challenge=ID
   //   ?before=<createdAt>:<kind>:<id> → nächste Seite
   r.get('/gallery', requireUser, (req, res) => {
     const admin = req.user.role === 'admin';
     const challenge = int(req.query.challenge);
-    const source = challenge ? 'groups' : String(req.query.source || 'all');
+    let source = challenge ? 'challenges' : String(req.query.source || 'all');
+    if (source === 'groups') source = 'community'; // alter Name
+    const wantOfficial = ['all', 'official'].includes(source);
+    const wantSnapshots = ['all', 'snapshots', 'community'].includes(source);
+    const wantChallenges = ['all', 'challenges', 'community'].includes(source);
     const parts = [];
     const params = [];
-    if (source !== 'groups') {
-      parts.push(`SELECT 'official' AS kind, gp.id, '/uploads/' || gp.file AS url, '/uploads/' || COALESCE(gp.thumb, gp.file) AS thumb,
-          'ICF Youth' AS groupName, NULL AS groupId, NULL AS challengeId, gp.caption AS challengeTitle, gp.caption AS caption,
-          NULL AS by, gp.created_at AS createdAt
-        FROM gallery_photos gp`);
+    // Spalten überall in derselben Reihenfolge (UNION verbindet nach Position)
+    if (wantOfficial || wantSnapshots) {
+      const flags = [wantOfficial ? 1 : null, wantSnapshots ? 0 : null].filter((v) => v !== null);
+      parts.push(`SELECT CASE WHEN gp.official = 1 THEN 'official' ELSE 'snapshot' END AS kind, gp.id,
+          '/uploads/' || gp.file AS url, '/uploads/' || COALESCE(gp.thumb, gp.file) AS thumb,
+          CASE WHEN gp.official = 1 THEN 'ICF Youth' ELSE COALESCE(g.name, u.display_name, 'Camp') END AS groupName,
+          gp.group_id AS groupId, NULL AS challengeId, gp.caption AS challengeTitle, gp.caption AS caption,
+          CASE WHEN gp.official = 1 THEN NULL ELSE u.display_name END AS by, gp.user_id AS userId, gp.created_at AS createdAt
+        FROM gallery_photos gp LEFT JOIN groups g ON g.id = gp.group_id LEFT JOIN users u ON u.id = gp.user_id
+        WHERE gp.official IN (${flags.join(', ')})`);
     }
-    if (source !== 'official') {
-      // Spalten in derselben Reihenfolge wie oben (UNION verbindet nach Position)
+    if (wantChallenges) {
       parts.push(`SELECT 'photo' AS kind, p.id, '/uploads/' || p.file AS url, '/uploads/' || COALESCE(p.thumb, p.file) AS thumb,
           g.name AS groupName, g.id AS groupId, c.id AS challengeId, c.title AS challengeTitle, '' AS caption,
-          u.display_name AS by, p.created_at AS createdAt
+          u.display_name AS by, p.user_id AS userId, p.created_at AS createdAt
         FROM photos p JOIN submissions s ON s.id = p.submission_id JOIN groups g ON g.id = s.group_id
         JOIN challenges c ON c.id = s.challenge_id LEFT JOIN users u ON u.id = p.user_id
         WHERE ${admin ? '1 = 1' : 'c.published = 1'}${challenge ? ' AND c.id = ?' : ''}`);
       if (challenge) params.push(challenge);
     }
-    let sql = `SELECT kind, id, url, thumb, groupName, groupId, challengeId, challengeTitle, caption, by, createdAt
+    if (!parts.length) throw bad('Unbekannte Auswahl');
+    let sql = `SELECT kind, id, url, thumb, groupName, groupId, challengeId, challengeTitle, caption, by, userId, createdAt
       FROM (${parts.join(' UNION ALL ')})`;
     const [t, k, i] = String(req.query.before || '').split(':');
     if (t && k && i) {
@@ -407,8 +417,45 @@ export function apiRouter({ io, game }) {
       challenges: first ? all(`SELECT c.id, c.title, COUNT(p.id) AS count
         FROM challenges c JOIN submissions s ON s.challenge_id = c.id JOIN photos p ON p.submission_id = s.id
         ${admin ? '' : 'WHERE c.published = 1'} GROUP BY c.id ORDER BY c.created_at DESC`) : undefined,
-      officialCount: first ? one('SELECT COUNT(*) AS n FROM gallery_photos').n : undefined,
+      officialCount: first ? one('SELECT COUNT(*) AS n FROM gallery_photos WHERE official = 1').n : undefined,
+      snapshotCount: first ? one('SELECT COUNT(*) AS n FROM gallery_photos WHERE official = 0').n : undefined,
     });
+  });
+
+  // Schnappschüsse: alle können Camp-Fotos teilen (ohne Challenge)
+  r.post('/gallery', requireUser, upload.fields([{ name: 'photos', maxCount: 10 }, { name: 'thumbs', maxCount: 10 }]), (req, res) => {
+    const photos = req.files?.photos || [];
+    const thumbs = req.files?.thumbs || [];
+    const official = req.user.role === 'admin' ? 1 : 0;
+    let caption = '';
+    try {
+      limit(`snapshot:${req.user.id}`, 40, 10 * MIN, 'Du hast gerade sehr viele Fotos geteilt – warte kurz und versuch es dann nochmals.');
+      if (!photos.length) throw bad('Bitte mindestens ein Bild auswählen');
+      caption = String(req.body?.caption || '').trim().slice(0, 120);
+      tx(() => photos.forEach((f, i) => {
+        run('INSERT INTO gallery_photos (user_id, group_id, official, file, thumb, caption, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          req.user.id, official ? null : req.user.group_id, official, f.filename, thumbs[i]?.filename ?? null, caption, now());
+      }));
+      thumbs.slice(photos.length).forEach((f) => removeFile(f.filename));
+    } catch (e) { cleanupUploads(req); throw e; }
+    refresh('gallery');
+    const groupName = req.user.group_id ? one('SELECT name FROM groups WHERE id = ?', req.user.group_id)?.name : null;
+    io.emit('photo:new', official
+      ? { official: true, groupName: 'ICF Youth', caption, count: photos.length, userId: req.user.id }
+      : { snapshot: true, groupName: groupName || req.user.display_name, by: req.user.display_name, caption, count: photos.length, userId: req.user.id });
+    res.json({ ok: true });
+  });
+
+  // Foto ohne Challenge löschen: eigene Schnappschüsse oder als Admin alles
+  r.delete('/gallery/:id', requireUser, (req, res) => {
+    const p = one('SELECT id, file, thumb, user_id FROM gallery_photos WHERE id = ?', int(req.params.id));
+    if (!p) throw new HttpError(404, 'Foto nicht gefunden');
+    if (req.user.role !== 'admin' && p.user_id !== req.user.id) throw new HttpError(403, 'Du kannst nur deine eigenen Fotos löschen');
+    run('DELETE FROM gallery_photos WHERE id = ?', p.id);
+    removeFile(p.file);
+    removeFile(p.thumb);
+    refresh('gallery');
+    res.json({ ok: true });
   });
 
   // ---------- Stadt Land Youth ----------
