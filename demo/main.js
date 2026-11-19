@@ -2,9 +2,13 @@
 // Der echte Server-Code (server/*.js) läuft hier direkt im Browser:
 //   SQLite → sql.js (WebAssembly), Express/Multer/fs → kleine Ersatzmodule in demo/shims.
 // Alle Daten bleiben auf diesem Gerät (IndexedDB). Zwei Bot-Smallgroups spielen mit.
-import { initStore, kvGet, kvSet, files, wipe } from './store.js';
+import { initStore, kvGet, kvSet, files, wipe, clearAll } from './store.js';
 import { pickWord } from './words.js';
 import { coverFiles } from '../public/cover.js';
+import { artFiles } from './art.js';
+
+// Wird die Version erhöht, bekommen alle Demo-Geräte frische Beispieldaten
+const SEED_VERSION = 2;
 
 // Einstellungen wie in der .env – im Demo ohne Mails
 globalThis.__DEMO_ENV = { EMAIL_VERIFICATION: 'off', ADMIN_USERNAME: 'admin', ADMIN_PASSWORD: 'admin', DATA_DIR: 'data' };
@@ -256,55 +260,14 @@ function botTick() {
 }
 
 // ---------- Beispieldaten ----------
-async function fakePhoto(seed, title, subtitle) {
-  const w = 1200;
-  const h = 900;
-  const c = document.createElement('canvas');
-  c.width = w;
-  c.height = h;
-  const g = c.getContext('2d');
-  const hues = [[18, 280], [200, 235], [42, 8], [150, 195], [330, 260], [255, 190], [95, 160]][seed % 7];
-  const grad = g.createLinearGradient(0, 0, w, h);
-  grad.addColorStop(0, `hsl(${hues[0]}, 85%, 60%)`);
-  grad.addColorStop(1, `hsl(${hues[1]}, 70%, 28%)`);
-  g.fillStyle = grad;
-  g.fillRect(0, 0, w, h);
-  let s = seed * 9301 + 49297;
-  const rnd = () => { s = (s * 9301 + 49297) % 233280; return s / 233280; };
-  for (let i = 0; i < 7; i++) {
-    g.fillStyle = `rgba(255,255,255,${0.06 + rnd() * 0.12})`;
-    g.beginPath();
-    g.arc(rnd() * w, rnd() * h, 60 + rnd() * 190, 0, Math.PI * 2);
-    g.fill();
-  }
-  g.fillStyle = 'rgba(255,255,255,.16)';
-  g.beginPath();
-  g.moveTo(w, h * 0.14);
-  g.bezierCurveTo(w * 0.76, h * 0.26, w * 0.39, h * 0.52, w * 0.13, h * 0.875);
-  g.bezierCurveTo(w * 0.35, h * 0.7, w * 0.7, h * 0.61, w, h * 0.58);
-  g.fill();
-  // Text mittig, damit er auch im quadratischen Vorschaubild ganz sichtbar ist
-  g.fillStyle = '#fff';
-  g.textAlign = 'center';
-  let size = 84;
-  g.font = `italic 900 ${size}px Archivo, Arial, sans-serif`;
-  while (g.measureText(title).width > w * 0.66 && size > 40) {
-    size -= 4;
-    g.font = `italic 900 ${size}px Archivo, Arial, sans-serif`;
-  }
-  g.fillText(title, w / 2, h * 0.47);
-  g.font = '600 36px Archivo, Arial, sans-serif';
-  g.fillText(subtitle, w / 2, h * 0.47 + 58);
-  const toBlob = (canvas, q) => new Promise((r) => canvas.toBlob(r, 'image/jpeg', q));
-  const t = document.createElement('canvas');
-  t.width = 480;
-  t.height = 360;
-  t.getContext('2d').drawImage(c, 0, 0, 480, 360);
-  const name = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
-  const file = `${name()}.jpg`;
-  const thumb = `${name()}.jpg`;
-  files.put(file, await toBlob(c, 0.85));
-  files.put(thumb, await toBlob(t, 0.75));
+// Generiertes Bild (demo/art.js) im Demo-Speicher ablegen
+const fileId = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
+async function storeArt(scene, seed, label) {
+  const art = await artFiles(scene, seed, label);
+  const file = `${fileId()}.jpg`;
+  const thumb = `${fileId()}.jpg`;
+  files.put(file, art.image);
+  files.put(thumb, art.thumb);
   return { file, thumb };
 }
 
@@ -335,9 +298,8 @@ async function seed() {
   const challenge = async (n, title, description, points, deadline) => {
     // Titelbild im JFC-Stil – derselbe Generator wie im Admin-Formular
     const cover = await coverFiles(title, n);
-    const id = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
-    const file = `${id()}.jpg`;
-    const thumb = `${id()}.jpg`;
+    const file = `${fileId()}.jpg`;
+    const thumb = `${fileId()}.jpg`;
     files.put(file, cover.image);
     files.put(thumb, cover.thumb);
     return run(`INSERT INTO challenges (title, description, points, deadline, published, image, thumb, created_at)
@@ -347,11 +309,12 @@ async function seed() {
   const c2 = await challenge(1, 'Selfie mit einem Leiter', 'Macht ein Smallgroup-Selfie mit einer Person aus dem Leiterteam. Je kreativer, desto besser!', 50, now + 2 * 24 * H);
   await challenge(2, 'Lobpreis-Flashmob', 'Singt in der Mittagspause spontan einen Worship-Song – an einem Ort, wo man es nicht erwartet. Filmt oder fotografiert es!', 80, null);
 
-  const submit = async (cid, title, gid, uid, groupName, count, points, comment) => {
+  // Einreichungen der Bot-Smallgroups mit generierten Bildern passend zur Challenge
+  const submit = async (cid, title, scene, gid, uid, groupName, count, points, comment) => {
     const sid = run('INSERT INTO submissions (challenge_id, group_id, comment, points, updated_at) VALUES (?, ?, ?, ?, ?)',
       cid, gid, comment, points, now - 2 * H).id;
     for (let i = 0; i < count; i++) {
-      const img = await fakePhoto(gid * 3 + cid + i + 3, groupName, title);
+      const img = await storeArt(scene, gid * 10 + cid + i, groupName.toUpperCase());
       run('INSERT INTO photos (submission_id, user_id, file, thumb, created_at) VALUES (?, ?, ?, ?, ?)', sid, uid, img.file, img.thumb, now - 2 * H + i);
     }
     if (points !== null) {
@@ -359,9 +322,21 @@ async function seed() {
         gid, points, `Challenge: ${title}`, `submission:${sid}`, now - H);
     }
   };
-  await submit(c1, 'Human Pyramid', g2, noah, 'Davids Crew', 2, 80, 'Drei Stockwerke! 💪');
-  await submit(c2, 'Selfie mit einem Leiter', g2, noah, 'Davids Crew', 1, 50, '');
-  await submit(c2, 'Selfie mit einem Leiter', g3, elia, 'Salz & Licht', 1, null, 'Mit Leiterin Anna 🙌');
+  await submit(c1, 'Human Pyramid', 'pyramid', g2, noah, 'Davids Crew', 2, 80, 'Drei Stockwerke! 💪');
+  await submit(c2, 'Selfie mit einem Leiter', 'selfie', g2, noah, 'Davids Crew', 1, 50, '');
+  await submit(c2, 'Selfie mit einem Leiter', 'selfie', g3, elia, 'Salz & Licht', 1, null, 'Mit Leiterin Anna 🙌');
+
+  // Fotos vom ICF-Youth-Team (Galerie + Startseite)
+  const admin = M.db.one("SELECT id FROM users WHERE role = 'admin'").id;
+  const official = [
+    ['smallgroup', 'Smallgroup-Time am Morgen ☕', 20 * H],
+    ['opening', 'Camp-Opening in The Hall 🎉', 6 * H],
+    ['worship', 'Worship Night – was für ein Abend! 🔥', 1 * H],
+  ];
+  for (const [i, [scene, caption, ago]] of official.entries()) {
+    const img = await storeArt(scene, 100 + i);
+    run('INSERT INTO gallery_photos (user_id, file, thumb, caption, created_at) VALUES (?, ?, ?, ?, ?)', admin, img.file, img.thumb, caption, now - ago);
+  }
   run(`INSERT INTO points (group_id, amount, reason, source, created_at) VALUES (?, 20, 'Zusatz-Challenge: Pünktlich beim Morgenprogramm', 'bonus', ?)`, g3, now - 3 * H);
   run(`INSERT INTO points (group_id, amount, reason, source, created_at) VALUES (?, 10, 'Bei der Abendaktion dabei', 'bonus', ?)`, g1, now - 3 * H);
 }
@@ -381,6 +356,11 @@ export async function init() {
   await initStore();
   await loadScript('sql-wasm.js');
   globalThis.__SQL = await globalThis.initSqlJs({ locateFile: (f) => f });
+  if ((await kvGet('seedVersion')) !== SEED_VERSION) {
+    // Alte Demo-Daten (z.B. mit den früheren bunten Platzhalter-Bildern) verwerfen
+    await clearAll();
+    Object.keys(localStorage).filter((k) => k.startsWith('jfc-demo')).forEach((k) => localStorage.removeItem(k));
+  }
   globalThis.__DEMO_DB_BYTES = await kvGet('db');
   await files.loadAll();
   // Server-Module erst jetzt laden (sie öffnen beim Import die Datenbank)
@@ -393,6 +373,7 @@ export async function init() {
   engine = game.createGame(io);
   router = routes.apiRouter({ io, game: engine });
   if (!db.one('SELECT 1 FROM groups LIMIT 1')) await seed();
+  await kvSet('seedVersion', SEED_VERSION);
   engine.resume();
   saveNow();
   botTimer = setInterval(botTick, 1000);

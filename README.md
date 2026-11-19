@@ -36,6 +36,7 @@ Für das echte Camp, mit allen Handys live verbunden und mit Mails, braucht es d
 - Einreichungen bewerten
 - **Bonuspunkte** an eine oder mehrere Smallgroups vergeben (z.B. für eine Zusatz-Challenge). Negative Punkte sind auch möglich.
 - Smallgroups verwalten: vorab erstellen, umbenennen, Leute verschieben, Passwort setzen, **Konten manuell freischalten** (falls eine Mail nicht ankommt)
+- **Fotos vom ICF Youth** in der Galerie hochladen (ohne Challenge, mit Bildtext). Sie erscheinen sofort bei allen gross auf der Startseite.
 - Unpassende Fotos direkt in der Galerie löschen
 - Rangliste verstecken, z.B. für die grosse Auflösung am Schluss
 - Stadt Land Youth steuern (siehe unten)

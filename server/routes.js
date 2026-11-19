@@ -366,22 +366,49 @@ export function apiRouter({ io, game }) {
     res.json({ ok: true });
   });
 
-  // Galerie: alle Fotos aller Smallgroups
+  // Galerie: Fotos aller Smallgroups + Fotos vom ICF-Youth-Team, neuste zuerst.
+  //   ?source=official → nur ICF Youth, ?source=groups → nur Smallgroups, ?challenge=ID → eine Challenge
+  //   ?before=<createdAt>:<kind>:<id> → nächste Seite
   r.get('/gallery', requireUser, (req, res) => {
     const admin = req.user.role === 'admin';
-    const cond = [admin ? '1 = 1' : 'c.published = 1'];
+    const challenge = int(req.query.challenge);
+    const source = challenge ? 'groups' : String(req.query.source || 'all');
+    const parts = [];
     const params = [];
-    if (int(req.query.challenge)) { cond.push('c.id = ?'); params.push(int(req.query.challenge)); }
-    if (int(req.query.before)) { cond.push('p.id < ?'); params.push(int(req.query.before)); }
+    if (source !== 'groups') {
+      parts.push(`SELECT 'official' AS kind, gp.id, '/uploads/' || gp.file AS url, '/uploads/' || COALESCE(gp.thumb, gp.file) AS thumb,
+          'ICF Youth' AS groupName, NULL AS groupId, NULL AS challengeId, gp.caption AS challengeTitle, gp.caption AS caption,
+          NULL AS by, gp.created_at AS createdAt
+        FROM gallery_photos gp`);
+    }
+    if (source !== 'official') {
+      // Spalten in derselben Reihenfolge wie oben (UNION verbindet nach Position)
+      parts.push(`SELECT 'photo' AS kind, p.id, '/uploads/' || p.file AS url, '/uploads/' || COALESCE(p.thumb, p.file) AS thumb,
+          g.name AS groupName, g.id AS groupId, c.id AS challengeId, c.title AS challengeTitle, '' AS caption,
+          u.display_name AS by, p.created_at AS createdAt
+        FROM photos p JOIN submissions s ON s.id = p.submission_id JOIN groups g ON g.id = s.group_id
+        JOIN challenges c ON c.id = s.challenge_id LEFT JOIN users u ON u.id = p.user_id
+        WHERE ${admin ? '1 = 1' : 'c.published = 1'}${challenge ? ' AND c.id = ?' : ''}`);
+      if (challenge) params.push(challenge);
+    }
+    let sql = `SELECT kind, id, url, thumb, groupName, groupId, challengeId, challengeTitle, caption, by, createdAt
+      FROM (${parts.join(' UNION ALL ')})`;
+    const [t, k, i] = String(req.query.before || '').split(':');
+    if (t && k && i) {
+      sql += ' WHERE createdAt < ? OR (createdAt = ? AND (kind > ? OR (kind = ? AND id < ?)))';
+      params.push(int(t), int(t), k, k, int(i));
+    }
     const max = Math.min(100, Math.max(1, int(req.query.limit, 60)));
-    const photos = all(`SELECT ${PHOTO_COLS}, g.name AS groupName, g.id AS groupId, c.id AS challengeId, c.title AS challengeTitle
-      FROM photos p JOIN submissions s ON s.id = p.submission_id JOIN groups g ON g.id = s.group_id
-      JOIN challenges c ON c.id = s.challenge_id LEFT JOIN users u ON u.id = p.user_id
-      WHERE ${cond.join(' AND ')} ORDER BY p.id DESC LIMIT ?`, ...params, max);
-    const challenges = int(req.query.before) ? undefined : all(`SELECT c.id, c.title, COUNT(p.id) AS count
-      FROM challenges c JOIN submissions s ON s.challenge_id = c.id JOIN photos p ON p.submission_id = s.id
-      ${admin ? '' : 'WHERE c.published = 1'} GROUP BY c.id ORDER BY c.created_at DESC`);
-    res.json({ photos, challenges, more: photos.length === max });
+    const photos = all(`${sql} ORDER BY createdAt DESC, kind ASC, id DESC LIMIT ?`, ...params, max);
+    const first = !req.query.before;
+    res.json({
+      photos,
+      more: photos.length === max,
+      challenges: first ? all(`SELECT c.id, c.title, COUNT(p.id) AS count
+        FROM challenges c JOIN submissions s ON s.challenge_id = c.id JOIN photos p ON p.submission_id = s.id
+        ${admin ? '' : 'WHERE c.published = 1'} GROUP BY c.id ORDER BY c.created_at DESC`) : undefined,
+      officialCount: first ? one('SELECT COUNT(*) AS n FROM gallery_photos').n : undefined,
+    });
   });
 
   // ---------- Stadt Land Youth ----------
@@ -444,6 +471,38 @@ export function apiRouter({ io, game }) {
     removeFile(c.thumb);
     refresh('challenges');
     refresh('points');
+    refresh('gallery');
+    res.json({ ok: true });
+  });
+
+  // Fotos vom ICF-Youth-Team (ohne Challenge) – erscheinen in der Galerie und auf der Startseite
+  a.post('/gallery', upload.fields([{ name: 'photos', maxCount: 10 }, { name: 'thumbs', maxCount: 10 }]), (req, res) => {
+    const photos = req.files?.photos || [];
+    const thumbs = req.files?.thumbs || [];
+    try {
+      if (!photos.length) throw bad('Bitte mindestens ein Bild auswählen');
+      const caption = String(req.body?.caption || '').trim().slice(0, 120);
+      tx(() => photos.forEach((f, i) => {
+        run('INSERT INTO gallery_photos (user_id, file, thumb, caption, created_at) VALUES (?, ?, ?, ?, ?)',
+          req.user.id, f.filename, thumbs[i]?.filename ?? null, caption, now());
+      }));
+      thumbs.slice(photos.length).forEach((f) => removeFile(f.filename));
+      refresh('gallery');
+      io.emit('photo:new', { official: true, groupName: 'ICF Youth', caption, count: photos.length, userId: req.user.id });
+      res.json({ ok: true });
+    } catch (e) { cleanupUploads(req); throw e; }
+  });
+  a.put('/gallery/:id', (req, res) => {
+    run('UPDATE gallery_photos SET caption = ? WHERE id = ?', String(req.body?.caption || '').trim().slice(0, 120), int(req.params.id));
+    refresh('gallery');
+    res.json({ ok: true });
+  });
+  a.delete('/gallery/:id', (req, res) => {
+    const p = one('SELECT id, file, thumb FROM gallery_photos WHERE id = ?', int(req.params.id));
+    if (!p) throw new HttpError(404, 'Foto nicht gefunden');
+    run('DELETE FROM gallery_photos WHERE id = ?', p.id);
+    removeFile(p.file);
+    removeFile(p.thumb);
     refresh('gallery');
     res.json({ ok: true });
   });

@@ -56,6 +56,15 @@ export const files = {
   },
 };
 
+// Alle gespeicherten Demo-Daten leeren (Datenbank + Bilder)
+export async function clearAll() {
+  await tx('kv', 'readwrite', (s) => s.clear());
+  await tx('files', 'readwrite', (s) => s.clear());
+  files.urls.forEach((u) => URL.revokeObjectURL(u));
+  files.urls.clear();
+  files.map.clear();
+}
+
 export async function wipe() {
   idb?.close();
   await new Promise((resolve) => {

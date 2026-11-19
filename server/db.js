@@ -67,6 +67,14 @@ CREATE TABLE IF NOT EXISTS photos (
   file TEXT NOT NULL,
   created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS gallery_photos (   -- Fotos vom ICF-Youth-Team (ohne Challenge)
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  file TEXT NOT NULL,
+  thumb TEXT,
+  caption TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS points (
   id INTEGER PRIMARY KEY,
   group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
