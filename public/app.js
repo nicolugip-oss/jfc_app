@@ -166,6 +166,8 @@ const routes = [
   { path: '/', view: viewHome, tab: 'home' },
   { path: '/challenges', view: viewChallenges, tab: 'challenges' },
   { path: '/galerie', view: viewGallery, tab: 'challenges' },
+  { path: '/ankuendigungen', view: viewAnnouncements, tab: 'home' },
+  { path: '/admin/ankuendigungen', view: viewAnnouncementsAdmin, admin: true, tab: 'admin' },
   { path: '/challenges/:id', view: viewChallenge, tab: 'challenges' },
   { path: '/spiel', view: viewGame, tab: 'spiel' },
   { path: '/rangliste', view: viewLeaderboard, tab: 'rangliste' },
@@ -270,6 +272,10 @@ function connectSocket() {
     if (!S.view?.onStopped && S.game?.joined) toast(`🛑 STOPP! ${p.by ? p.by + ' war am schnellsten' : 'Runde vorbei'}`);
   });
   S.socket.on('refresh', (topic) => S.view?.onRefresh?.(topic));
+  S.socket.on('announcement:new', (p) => {
+    if (p.userId === S.me?.user.id) return;
+    toast(`${p.kind === 'event' ? '⚡ Quick-Event' : p.kind === 'challenge' ? '📸' : '📢'}: ${p.title}`);
+  });
   S.socket.on('photo:new', (p) => {
     if (!p?.groupName || p.userId === S.me?.user.id) return;
     const n = p.count > 1 ? `${p.count} neue Fotos` : 'neues Foto';
@@ -348,6 +354,7 @@ async function afterLogin() {
   await refreshMe();
   disconnectSocket();
   connectSocket();
+  syncPush();
   go('/');
 }
 
@@ -480,7 +487,7 @@ async function viewReset(main, { query }) {
     <form class="card" id="f">
       <h2>Neues Passwort</h2>
       <label class="field"><span>Neues Passwort (mind. 8 Zeichen)</span><input class="input" name="password" type="password" minlength="8" required autocomplete="new-password"></label>
-      <label class="row small" style="margin:-4px 0 14px"><input type="checkbox" data-show> Passwort anzeigen</label>
+      <label class="check small" style="margin:-4px 0 14px"><input type="checkbox" data-show> Passwort anzeigen</label>
       <button class="btn primary block big">Speichern</button>
     </form>`));
   const form = $('#f', main);
@@ -522,10 +529,196 @@ async function shareCode(g) {
 /* =========================================================
    Home
    ========================================================= */
+/* ---------- Ankündigungen ---------- */
+function timeAgo(ts) {
+  const min = Math.round((Date.now() - ts) / 60_000);
+  if (min < 1) return 'gerade eben';
+  if (min < 60) return `vor ${min} Min.`;
+  if (min < 24 * 60) return `vor ${Math.round(min / 60)} Std.`;
+  return fmtDate(ts);
+}
+function fmtEventTime(ts) {
+  const d = new Date(ts);
+  const day = (offset) => { const x = new Date(); x.setDate(x.getDate() + offset); return x.toDateString(); };
+  const time = d.toLocaleTimeString('de-CH', { hour: '2-digit', minute: '2-digit' });
+  if (d.toDateString() === day(0)) return `Heute, ${time}`;
+  if (d.toDateString() === day(1)) return `Morgen, ${time}`;
+  return fmtDate(ts);
+}
+const ANN_KIND = { event: '⚡ Quick-Event', challenge: '📸 Neue Challenge', info: '📢 Ankündigung' };
+// Rückmeldung nach dem Versand: wie viele Geräte die Push-Nachricht bekommen haben
+const pushInfo = (p) => (!p ? '' : p.total ? ` · Push an ${plural(p.sent, 'Gerät', 'Geräte')}` : ' · (noch niemand hat Push aktiviert)');
+function announcementCard(a, { admin = false } = {}) {
+  const event = a.kind === 'event';
+  const past = event && a.eventAt && Date.now() > a.eventAt + 3 * 3_600_000;
+  const inner = html`
+    <div class="ann-top"><span class="ann-kind">${ANN_KIND[a.kind] || ANN_KIND.info}${past ? ' · vorbei' : ''}</span><span class="ann-ago">${timeAgo(a.createdAt)}</span></div>
+    <h3>${a.title}</h3>
+    ${a.eventAt || a.location ? html`<div class="ann-meta">${a.eventAt ? html`<span>🕒 ${fmtEventTime(a.eventAt)}</span>` : ''}${a.location ? html`<span>📍 ${a.location}</span>` : ''}</div>` : ''}
+    ${a.body ? html`<p class="ann-body">${a.body}</p>` : ''}
+    ${admin ? html`<div class="ann-admin small"><span class="muted">${a.pushed ? '🔔 mit Push gesendet' : 'ohne Push'}</span><button class="btn sm danger" data-del-ann="${a.id}">Löschen</button></div>` : ''}`;
+  const cls = `card ann ${event && !past ? 'event' : ''} ${past ? 'past' : ''}`;
+  return a.link && !admin ? html`<a class="${cls}" href="${a.link}">${inner}</a>` : html`<div class="${cls}">${inner}</div>`;
+}
+function announcementsSection(news) {
+  if (!news.items.length && !isAdmin()) return '';
+  return html`
+    <div class="section">
+      <div class="row between" style="margin-bottom:10px"><h3 style="margin:0">📢 Ankündigungen</h3>
+        ${isAdmin() ? html`<a class="btn sm primary" href="#/admin/ankuendigungen">+ Neu</a>` : news.total > news.items.length ? html`<a href="#/ankuendigungen" class="small">Alle (${news.total}) →</a>` : ''}</div>
+      ${news.items.length ? html`<div class="ann-list">${news.items.map((a) => announcementCard(a))}</div>`
+        : html`<div class="card empty" style="padding:20px">Noch keine Ankündigungen. Erstelle die erste – z.B. ein Quick-Event.</div>`}
+    </div>`;
+}
+
+async function viewAnnouncements(main) {
+  async function load() {
+    const news = await api('GET', '/api/announcements?limit=50');
+    set(main, html`<h1>Ankündigungen</h1>
+      ${news.items.length ? html`<div class="ann-list">${news.items.map((a) => announcementCard(a))}</div>` : html`<div class="card empty">Noch keine Ankündigungen.</div>`}`);
+  }
+  await load();
+  return { onRefresh: (t) => t === 'announcements' && load().catch(() => {}) };
+}
+
+async function viewAnnouncementsAdmin(main) {
+  let kind = 'event';
+  async function load() {
+    const [news, stats] = await Promise.all([api('GET', '/api/announcements?limit=50'), api('GET', '/api/admin/push/stats')]);
+    const soon = new Date(Date.now() + 30 * 60_000);
+    soon.setMinutes(Math.ceil(soon.getMinutes() / 15) * 15, 0, 0);
+    set(main, html`
+      <a href="#/admin" class="small">← Admin</a>
+      <h1 style="margin-top:12px">Ankündigungen</h1>
+      <form class="card" id="af">
+        <div class="seg"><button type="button" data-kind="event" class="${kind === 'event' ? 'on' : ''}">⚡ Quick-Event</button><button type="button" data-kind="info" class="${kind === 'info' ? 'on' : ''}">📢 Ankündigung</button></div>
+        <label class="field"><span>Titel</span><input class="input" name="title" required maxlength="100" placeholder="${kind === 'event' ? 'z.B. Ping Pong Battle gegen ICF München' : 'z.B. Morgen-Programm startet 30 Min. später'}"></label>
+        <label class="field"><span>Text (optional)</span><textarea class="input" name="body" maxlength="1000" rows="3" placeholder="Was, wer, was mitbringen …"></textarea></label>
+        ${kind === 'event' ? html`<div class="row">
+          <label class="field grow"><span>Wann</span><input class="input" name="eventAt" type="datetime-local" value="${toLocalInput(soon.getTime())}" required></label>
+          <label class="field grow"><span>Wo</span><input class="input" name="location" maxlength="80" placeholder="z.B. Foyer The Hall"></label></div>` : ''}
+        <label class="check" style="margin:4px 0 6px"><input type="checkbox" name="push" checked> <span>🔔 Push-Benachrichtigung an alle senden</span></label>
+        <p class="small muted" style="margin:0 0 14px">${stats.devices ? `${plural(stats.devices, 'Gerät hat', 'Geräte haben')} Push aktiviert (${plural(stats.people, 'Person', 'Personen')}).` : 'Noch hat niemand Push aktiviert – die Ankündigung erscheint trotzdem bei allen in der App.'}</p>
+        <button class="btn primary block big">Veröffentlichen</button>
+      </form>
+      <div class="section"><h3>Bisher</h3>
+        ${news.items.length ? html`<div class="ann-list">${news.items.map((a) => announcementCard(a, { admin: true }))}</div>` : html`<div class="card empty">Noch keine Ankündigungen.</div>`}
+      </div>`);
+    $$('[data-kind]', main).forEach((b) => (b.onclick = () => { kind = b.dataset.kind; load().catch(fail); }));
+    const form = $('#af', main);
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      const el = form.elements;
+      busy(e.submitter, async () => {
+        const at = el.namedItem('eventAt')?.value;
+        const res = await api('POST', '/api/admin/announcements', {
+          kind,
+          title: el.namedItem('title').value,
+          body: el.namedItem('body').value,
+          eventAt: at ? new Date(at).toISOString() : null,
+          location: el.namedItem('location')?.value || '',
+          push: el.namedItem('push').checked,
+        });
+        toast(`Veröffentlicht ✔${pushInfo(res.push)}`, 'ok');
+        await load();
+      });
+    };
+    $$('[data-del-ann]', main).forEach((b) => (b.onclick = () => {
+      if (confirm('Diese Ankündigung löschen?')) busy(b, async () => { await api('DELETE', `/api/admin/announcements/${b.dataset.delAnn}`); await load(); });
+    }));
+  }
+  await load();
+  return {};
+}
+
+/* ---------- Push-Benachrichtigungen ---------- */
+const isIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const store = {
+  get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
+  set: (k, v) => { try { localStorage.setItem(k, v); } catch {} },
+};
+const b64ToBytes = (b64) => {
+  const s = atob((b64 + '='.repeat((4 - (b64.length % 4)) % 4)).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from(s, (c) => c.charCodeAt(0));
+};
+
+async function pushStatus() {
+  const supported = 'Notification' in window && 'serviceWorker' in navigator && (DEMO || 'PushManager' in window);
+  if (!supported) return { supported: false };
+  const permission = Notification.permission;
+  let subscribed = false;
+  if (permission === 'granted') {
+    if (DEMO) subscribed = store.get('jfc-demo-push') === '1';
+    else {
+      const reg = await navigator.serviceWorker.getRegistration().catch(() => null);
+      subscribed = !!(await reg?.pushManager.getSubscription().catch(() => null));
+    }
+  }
+  return { supported, permission, subscribed };
+}
+
+async function pushPromptHtml() {
+  if (store.get('jfc-push-later') && Number(store.get('jfc-push-later')) > Date.now()) return '';
+  const st = await pushStatus();
+  if (st.supported && st.permission === 'granted' && st.subscribed) return '';
+  const later = html`<button class="btn sm ghost" data-push-later>Später</button>`;
+  if (!st.supported) {
+    if (!isIOS() || isStandalone()) return '';
+    return html`<div class="card section push-card"><span class="ic">🔔</span><div class="grow">
+      <b>Benachrichtigungen auf dem iPhone</b>
+      <p class="small muted" style="margin:4px 0 8px">Damit du Quick-Events nicht verpasst: Tippe in Safari auf <b>Teilen</b> → <b>«Zum Home-Bildschirm»</b>, öffne die App von dort und aktiviere hier die Benachrichtigungen.</p>${later}</div></div>`;
+  }
+  if (st.permission === 'denied') {
+    return html`<div class="card section push-card"><span class="ic">🔕</span><div class="grow"><b>Benachrichtigungen sind blockiert</b>
+      <p class="small muted" style="margin:4px 0 8px">Du kannst sie in den Einstellungen deines Handys bzw. Browsers für diese App wieder erlauben.</p>${later}</div></div>`;
+  }
+  return html`<div class="card section push-card"><span class="ic">🔔</span><div class="grow">
+    <b>Push-Benachrichtigungen aktivieren</b>
+    <p class="small muted" style="margin:4px 0 10px">Damit du neue Challenges und spontane Quick-Events sofort mitbekommst – auch wenn die App zu ist.</p>
+    <div class="row"><button class="btn primary sm" data-push-enable>Aktivieren</button>${later}</div></div></div>`;
+}
+
+function bindPushPrompt(root, rerender) {
+  $('[data-push-later]', root)?.addEventListener('click', () => { store.set('jfc-push-later', String(Date.now() + 3 * 24 * 3_600_000)); rerender(); });
+  const b = $('[data-push-enable]', root);
+  if (b) b.onclick = () => busy(b, async () => { if (await enablePush()) rerender(); });
+}
+
+async function enablePush() {
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') { toast('Ohne Erlaubnis gibt es leider keine Push-Benachrichtigungen.', 'error'); return false; }
+  await subscribePush();
+  toast('🔔 Push-Benachrichtigungen sind aktiv', 'ok');
+  return true;
+}
+
+// Abo beim Server (neu) anmelden – auch nach jedem Login, damit es zum richtigen Konto gehört
+async function subscribePush() {
+  if (DEMO) {
+    await api('POST', '/api/push/subscribe', { endpoint: 'demo-local', keys: { p256dh: 'demo', auth: 'demo' } });
+    store.set('jfc-demo-push', '1');
+    return;
+  }
+  const reg = await navigator.serviceWorker.ready;
+  let sub = await reg.pushManager.getSubscription();
+  if (!sub) {
+    const { publicKey } = await api('GET', '/api/push/key');
+    sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(publicKey) });
+  }
+  await api('POST', '/api/push/subscribe', sub.toJSON());
+}
+async function syncPush() {
+  try {
+    const st = await pushStatus();
+    if (st.supported && st.permission === 'granted' && (st.subscribed || DEMO)) await subscribePush();
+  } catch {}
+}
+
 async function viewHome(main) {
   async function load() {
-    const [me, lb, challenges, gallery, official] = await Promise.all([refreshMe(), api('GET', '/api/leaderboard'), api('GET', '/api/challenges'),
-      api('GET', '/api/gallery?source=community&limit=6'), api('GET', '/api/gallery?source=official&limit=7')]);
+    const [me, lb, challenges, gallery, news, pushCard] = await Promise.all([refreshMe(), api('GET', '/api/leaderboard'), api('GET', '/api/challenges'),
+      api('GET', '/api/gallery?limit=6'), api('GET', '/api/announcements?limit=3'), pushPromptHtml()]);
     if (!me) return go('/login');
     const g = me.group;
     const rankIdx = g ? lb.groups.findIndex((x) => x.id === g.id) : -1;
@@ -537,22 +730,8 @@ async function viewHome(main) {
       <div class="hello">Hey ${me.user.name.split(' ')[0]} 👋</div>
       ${game ? html`<a class="card accent live-banner" href="#/spiel"><span class="pulse"></span><div class="grow"><b>${game.title} läuft!</b><div class="small muted">${S.game.joined || isAdmin() ? 'Zum Spiel →' : 'Jetzt mit deiner Smallgroup beitreten →'}</div></div></a>` : ''}
 
-      ${official.photos.length ? html`
-        <div class="section">
-          <div class="row between" style="margin-bottom:10px"><h3 style="margin:0">⭐ Neu vom ICF Youth</h3>
-            ${isAdmin() ? html`<button class="btn sm" data-official-upload>📸 Hochladen</button>` : html`<a href="#/galerie" class="small">Alle →</a>`}</div>
-          <div data-lb>
-            <div class="hero-photo">
-              <img src="${official.photos[0].url}" data-full="${official.photos[0].url}" data-cap="⭐ ICF Youth" data-kind="official" data-photo-id="${official.photos[0].id}"
-                data-sub="${[official.photos[0].caption, fmtDate(official.photos[0].createdAt)].filter(Boolean).join(' · ')}" alt="">
-              <div class="hero-cap">${official.photos[0].caption ? html`<b>${official.photos[0].caption}</b>` : ''}<span>${fmtDate(official.photos[0].createdAt)}</span></div>
-            </div>
-            ${official.photos.length > 1 ? html`<div class="photos hero-more">${official.photos.slice(1).map(galleryTile)}</div>` : ''}
-          </div>
-        </div>`
-      : isAdmin() ? html`
-        <div class="section"><button class="card link block-btn" data-official-upload><h3>📸 Fotos vom ICF Youth hochladen</h3>
-          <p class="muted small" style="margin:0">Erscheinen gross hier auf der Startseite – bei allen.</p></button></div>` : ''}
+      ${announcementsSection(news)}
+      ${pushCard}
 
       ${isAdmin() ? html`
         <div class="section"><a class="card link" href="#/admin"><h3>🛠️ Admin-Bereich</h3><p class="muted small" style="margin:0">Challenges erstellen, bewerten, Punkte & Bonus vergeben, Spiel steuern.</p></a></div>`
@@ -595,7 +774,8 @@ async function viewHome(main) {
 
       <button class="btn ghost block section" data-logout>Ausloggen</button>`);
     $('[data-logout]', main)?.addEventListener('click', logout);
-    $$('[data-official-upload], [data-upload-snap]', main).forEach((b) => b.addEventListener('click', uploadModal));
+    $$('[data-upload-snap]', main).forEach((b) => b.addEventListener('click', uploadModal));
+    bindPushPrompt(main, () => load().catch(() => {}));
 
     $('[data-share]', main)?.addEventListener('click', () => shareCode(g));
     $('[data-switch]', main)?.addEventListener('click', switchGroupModal);
@@ -616,7 +796,7 @@ async function viewHome(main) {
   }
   await load();
   return {
-    onRefresh: (t) => ['points', 'groups', 'challenges', 'gallery'].includes(t) && load().catch(() => {}),
+    onRefresh: (t) => ['points', 'groups', 'challenges', 'gallery', 'announcements'].includes(t) && !$('.modal-bg') && load().catch(() => {}),
     onGame: () => { if (!!S.game?.game !== !!$('.live-banner', main)) load().catch(() => {}); },
   };
 }
@@ -690,22 +870,22 @@ async function viewChallenges(main) {
 
 const chTabs = (active) => html`<div class="seg"><a href="#/challenges" class="${active === 'c' ? 'on' : ''}">📸 Challenges</a><a href="#/galerie" class="${active === 'g' ? 'on' : ''}">🖼️ Galerie</a></div>`;
 
-// Ein Foto-Kachel in Galerie und Startseite. Arten: official (ICF Youth), snapshot (Schnappschuss), photo (Challenge)
-const KIND_LABEL = { official: '⭐ ICF Youth', snapshot: '📸 ' };
+// Foto-Kachel in Galerie und Startseite – überall gleich, beschriftet mit der Smallgroup (bzw. "ICF Youth")
+// Arten intern: official (vom Admin), snapshot (Teilnehmende), photo (Challenge-Einreichung)
 const galleryTile = (p) => html`
-  <div class="photo ${p.kind === 'official' ? 'official' : ''}">
-    <img src="${p.thumb}" data-full="${p.url}" data-cap="${p.kind === 'official' ? '⭐ ICF Youth' : p.groupName}" data-kind="${p.kind}" data-photo-id="${p.id}"
+  <div class="photo">
+    <img src="${p.thumb}" data-full="${p.url}" data-cap="${p.groupName}" data-kind="${p.kind}" data-photo-id="${p.id}"
       data-mine="${p.kind === 'snapshot' && p.userId === S.me?.user.id ? '1' : ''}" loading="lazy" alt=""
-      data-sub="${[p.kind === 'snapshot' ? (p.caption || 'Schnappschuss') : p.challengeTitle, p.by ? `von ${p.by}` : '', fmtDate(p.createdAt)].filter(Boolean).join(' · ')}">
-    <span class="by"><b>${p.kind === 'official' ? KIND_LABEL.official : p.kind === 'snapshot' ? KIND_LABEL.snapshot + p.groupName : p.groupName}</b></span></div>`;
+      data-sub="${[p.caption || p.challengeTitle, p.by ? `von ${p.by}` : '', fmtDate(p.createdAt)].filter(Boolean).join(' · ')}">
+    <span class="by"><b>${p.groupName}</b></span></div>`;
 
 // Fotos teilen: Teilnehmende → Schnappschuss, Admin → Foto vom ICF Youth (entscheidet der Server)
 function uploadModal() {
   const official = isAdmin();
   const m = modal(html`
-    <h2>${official ? '📸 Fotos vom ICF Youth' : '📸 Schnappschuss teilen'}</h2>
-    <p class="small muted">${official ? 'Erscheinen sofort bei allen in der Galerie und gross auf der Startseite.'
-      : 'Teile deine Camp-Momente – alle sehen sie sofort in der Galerie. Deine eigenen Fotos kannst du jederzeit wieder löschen.'}</p>
+    <h2>📸 Foto teilen</h2>
+    <p class="small muted">${official ? 'Erscheint sofort bei allen in der Galerie – mit dem Namen «ICF Youth».'
+      : 'Teile deine Camp-Momente – alle sehen sie sofort in der Galerie, mit dem Namen deiner Smallgroup. Deine eigenen Fotos kannst du jederzeit wieder löschen.'}</p>
     <label class="btn block upload-btn" style="margin-bottom:12px">📷 Fotos auswählen<input type="file" accept="image/*" multiple data-files></label>
     <div class="photos" data-previews style="margin-bottom:12px"></div>
     <label class="field"><span>Bildtext (optional)</span><input class="input" data-caption maxlength="120" placeholder="${official ? 'z.B. Worship Night in The Hall 🔥' : 'z.B. Pizza-Time mit der Smallgroup 🍕'}"></label>
@@ -736,47 +916,29 @@ function uploadModal() {
   });
 }
 
+// Galerie: ein Ort für alle Fotos aus dem Camp (neuste zuerst), jedes mit dem Namen der Smallgroup
 async function viewGallery(main) {
-  let filter = 'all'; // 'all' | 'official' | 'snapshots' | Challenge-ID
   let photos = [];
   let more = false;
-  let challenges = [];
-  let officialCount = 0;
-  let snapshotCount = 0;
   async function load(reset = true) {
     const q = new URLSearchParams({ limit: 60 });
-    if (filter === 'official' || filter === 'snapshots') q.set('source', filter);
-    else if (filter !== 'all') q.set('challenge', filter);
     const last = photos[photos.length - 1];
     if (!reset && last) q.set('before', `${last.createdAt}:${last.kind}:${last.id}`);
     const res = await api('GET', `/api/gallery?${q}`);
-    if (res.challenges) ({ challenges, officialCount, snapshotCount } = res);
     photos = reset ? res.photos : photos.concat(res.photos);
     more = res.more;
     render();
   }
   function render() {
-    const total = challenges.reduce((n, c) => n + c.count, 0) + officialCount + snapshotCount;
-    const chip = (key, label) => html`<button class="chip ${String(filter) === String(key) ? 'on' : ''}" data-f="${key}">${label}</button>`;
     set(main, html`
       <div class="row between" style="margin-bottom:14px"><h1 style="margin:0">Galerie</h1>
-        <button class="btn primary sm" data-upload-snap>📸 ${isAdmin() ? 'ICF-Fotos hochladen' : 'Foto teilen'}</button></div>
+        <button class="btn primary sm" data-upload-snap>📸 Foto teilen</button></div>
       ${chTabs('g')}
-      ${total ? html`<div class="chips scroll" style="margin-bottom:12px">
-        ${chip('all', `Alle · ${total}`)}
-        ${officialCount ? chip('official', `⭐ ICF Youth · ${officialCount}`) : ''}
-        ${snapshotCount ? chip('snapshots', `📸 Schnappschüsse · ${snapshotCount}`) : ''}
-        ${challenges.map((c) => chip(c.id, `${c.title} · ${c.count}`))}
-      </div>` : ''}
       ${isAdmin() && photos.length ? html`<p class="small muted" style="margin:-4px 0 10px">🗑️ Foto antippen → «Löschen», um es für alle zu entfernen.</p>` : ''}
       ${photos.length ? html`
         <div class="photos gallery" data-lb>${photos.map(galleryTile)}</div>
         ${more ? html`<button class="btn block section" data-more>Mehr laden</button>` : ''}`
-      : html`<div class="card empty"><div class="big">🖼️</div>Noch keine Fotos.<br>Teile einen Schnappschuss aus dem Camp oder lade bei den Challenges eure Bilder hoch – alle sehen sie hier.</div>`}`);
-    $$('[data-f]', main).forEach((b) => (b.onclick = () => {
-      filter = ['all', 'official', 'snapshots'].includes(b.dataset.f) ? b.dataset.f : Number(b.dataset.f);
-      load().catch(fail);
-    }));
+      : html`<div class="card empty"><div class="big">🖼️</div>Noch keine Fotos.<br>Teile deine Momente aus dem Camp – alle sehen sie hier.</div>`}`);
     $('[data-upload-snap]', main)?.addEventListener('click', uploadModal);
     const m = $('[data-more]', main);
     if (m) m.onclick = () => busy(m, () => load(false));
@@ -966,6 +1128,7 @@ async function viewAdmin(main) {
   set(main, html`
     <h1>Admin</h1>
     <div class="tiles">
+      <a class="card tile" href="#/admin/ankuendigungen"><span class="ic">📢</span><b>Ankündigungen</b><span class="muted">Quick-Events & News, mit oder ohne Push</span></a>
       <a class="card tile" href="#/admin/challenge/neu"><span class="ic">➕</span><b>Neue Challenge</b><span class="muted">Titel, Beschrieb, Punkte, Bild, Deadline</span></a>
       <a class="card tile" href="#/admin/bewerten"><span class="ic">✅</span><b>Bewerten</b><span class="muted">${pending.length ? `${pending.length} Einreichungen offen` : 'Alles bewertet'}</span></a>
       <a class="card tile" href="#/spiel"><span class="ic">🔤</span><b>Stadt Land Youth</b><span class="muted">${S.game?.game ? 'Spiel läuft – steuern' : 'Neues Spiel starten'}</span></a>
@@ -1003,7 +1166,12 @@ async function viewChallengeEdit(main, params) {
         </div>
         <p class="small muted" style="margin:6px 0 0" data-cover-hint></p>
       </div>
-      <label class="row" style="margin-bottom:16px"><input type="checkbox" name="published" ${c.published ? 'checked' : ''}> <span>Für alle sichtbar (sonst Entwurf)</span></label>
+      <label class="check" style="margin-bottom:10px"><input type="checkbox" name="published" ${c.published ? 'checked' : ''}> <span>Für alle sichtbar (sonst Entwurf)</span></label>
+      <div class="adminbar" style="margin-bottom:16px;padding:12px">
+        <label class="check" style="margin-bottom:8px"><input type="checkbox" name="announce" ${editing ? '' : 'checked'}> <span>📢 Auf der Startseite ankündigen</span></label>
+        <label class="check"><input type="checkbox" name="push" ${editing ? '' : 'checked'}> <span>🔔 Push-Benachrichtigung an alle senden</span></label>
+        ${editing ? html`<p class="small muted" style="margin:8px 0 0">Nur ankreuzen, wenn du die Änderung nochmals melden willst.</p>` : ''}
+      </div>
       <button class="btn primary block big">${editing ? 'Speichern' : 'Challenge erstellen'}</button>
     </form>
     ${editing ? html`<button class="btn danger block section" data-del>Challenge löschen</button>` : ''}`);
@@ -1053,6 +1221,8 @@ async function viewChallengeEdit(main, params) {
       const dl = el.namedItem('deadline').value;
       fd.append('deadline', dl ? new Date(dl).toISOString() : '');
       fd.append('published', el.namedItem('published').checked ? '1' : '0');
+      fd.append('announce', el.namedItem('announce').checked ? '1' : '0');
+      fd.append('push', el.namedItem('push').checked ? '1' : '0');
       const img = fileInput.files[0];
       if (mode === 'file' && img) {
         fd.append('image', await shrinkImage(img, 1800));
@@ -1063,7 +1233,7 @@ async function viewChallengeEdit(main, params) {
         fd.append('thumb', cover.thumb);
       }
       const res = await api(editing ? 'PUT' : 'POST', editing ? `/api/admin/challenges/${params.id}` : '/api/admin/challenges', fd);
-      toast(editing ? 'Gespeichert ✔' : 'Challenge erstellt 🎉', 'ok');
+      toast(`${editing ? 'Gespeichert ✔' : 'Challenge erstellt 🎉'}${pushInfo(res.push)}`, 'ok');
       go(`/challenges/${editing ? params.id : res.id}`);
     });
   };
@@ -1644,7 +1814,7 @@ async function boot() {
   }
   try { S.config = await api('GET', '/api/config'); } catch (e) { set($('#app'), html`<div class="empty">Server nicht erreichbar 😕<br>${e.message}</div>`); return; }
   try { await refreshMe(); } catch { S.me = null; }
-  if (S.me) connectSocket();
+  if (S.me) { connectSocket(); syncPush(); }
   window.addEventListener('hashchange', route);
   route();
 }

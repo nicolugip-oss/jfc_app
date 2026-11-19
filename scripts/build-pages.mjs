@@ -15,6 +15,7 @@ const SHIMS = {
   express: shim('express.js'),
   multer: shim('multer.js'),
   nodemailer: shim('nodemailer.js'),
+  'web-push': shim('web-push.js'),
 };
 
 fs.rmSync(out, { recursive: true, force: true });
@@ -36,7 +37,7 @@ await build({
   plugins: [{
     name: 'demo-shims',
     setup(b) {
-      b.onResolve({ filter: /^(node:(sqlite|fs|path|crypto)|express|multer|nodemailer)$/ }, (args) => ({ path: SHIMS[args.path] }));
+      b.onResolve({ filter: /^(node:(sqlite|fs|path|crypto)|express|multer|nodemailer|web-push)$/ }, (args) => ({ path: SHIMS[args.path] }));
     },
   }],
   logLevel: 'warning',

@@ -340,15 +340,25 @@ details > summary::-webkit-details-marker { display: none; }
 .cover-preview img { width: 100%; height: 100%; object-fit: cover; }
 label.upload-btn { cursor: pointer; }
 
-/* Fotos vom ICF Youth (Startseite + Galerie) */
-.hero-photo { position: relative; border-radius: var(--radius); overflow: hidden; background: var(--surface-2); aspect-ratio: 4 / 3; }
-.hero-photo img { width: 100%; height: 100%; object-fit: cover; cursor: zoom-in; }
-.hero-cap { position: absolute; left: 0; right: 0; bottom: 0; padding: 40px 16px 14px; background: linear-gradient(transparent, rgba(0, 0, 0, .85)); pointer-events: none; }
-.hero-cap b { display: block; font-weight: 900; font-stretch: 112%; font-style: italic; font-size: 19px; line-height: 1.15; }
-.hero-cap span { font-size: 12px; color: rgba(255, 255, 255, .75); }
-.hero-more { margin-top: 6px; }
-.photo.official { box-shadow: inset 0 0 0 2px #fff; }
-.photo.official img { padding: 2px; border-radius: 10px; }
-button.block-btn { width: 100%; text-align: left; cursor: pointer; font: inherit; color: inherit; }
+/* Ankündigungen & Quick-Events (Startseite) */
+.ann-list { display: grid; gap: 10px; }
+.ann { display: block; text-decoration: none; color: inherit; }
+.ann + .ann { margin-top: 0; }
+.ann h3 { margin: 6px 0 4px; font-size: 18px; }
+.ann-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12px; }
+.ann-kind { font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.ann-ago { color: var(--muted); white-space: nowrap; }
+.ann-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 14px; font-weight: 700; margin: 6px 0 2px; }
+.ann-body { margin: 6px 0 0; font-size: 14px; line-height: 1.45; white-space: pre-wrap; }
+.ann.event { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.ann.event .ann-ago, .ann.event .muted { color: rgba(0, 0, 0, .55); }
+.ann.past { opacity: .55; }
+.ann-admin { margin-top: 8px; display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+.push-card { display: flex; gap: 12px; align-items: flex-start; }
+.push-card .ic { font-size: 26px; line-height: 1; }
 .strip-grid { grid-template-columns: repeat(3, 1fr); }
 .strip-grid .photo .by { font-size: 10px; }
+
+/* Häkchen-Felder: Kästchen und Text immer nebeneinander */
+.check { display: flex; gap: 10px; align-items: center; flex-wrap: nowrap; cursor: pointer; }
+.check input[type=checkbox] { width: 20px; height: 20px; flex: none; margin: 0; accent-color: #fff; }

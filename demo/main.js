@@ -8,10 +8,10 @@ import { coverFiles } from '../public/cover.js';
 import { artFiles } from './art.js';
 
 // Wird die Version erhöht, bekommen alle Demo-Geräte frische Beispieldaten
-const SEED_VERSION = 3;
+const SEED_VERSION = 4;
 
 // Einstellungen wie in der .env – im Demo ohne Mails
-globalThis.__DEMO_ENV = { EMAIL_VERIFICATION: 'off', ADMIN_USERNAME: 'admin', ADMIN_PASSWORD: 'admin', DATA_DIR: 'data' };
+globalThis.__DEMO_ENV = { DEMO: '1', EMAIL_VERIFICATION: 'off', ADMIN_USERNAME: 'admin', ADMIN_PASSWORD: 'admin', DATA_DIR: 'data' };
 
 export const DEMO_LOGINS = {
   user: { email: 'lea@demo.ch', password: 'demo1234' },
@@ -307,7 +307,19 @@ async function seed() {
   };
   const c1 = await challenge(0, 'Human Pyramid', 'Baut als Smallgroup eine menschliche Pyramide – mit möglichst vielen Leuten.\n\nBonus: Ein Leiter ist mit drauf!', 100, null);
   const c2 = await challenge(1, 'Selfie mit einem Leiter', 'Macht ein Smallgroup-Selfie mit einer Person aus dem Leiterteam. Je kreativer, desto besser!', 50, now + 2 * 24 * H);
-  await challenge(2, 'Lobpreis-Flashmob', 'Singt in der Mittagspause spontan einen Worship-Song – an einem Ort, wo man es nicht erwartet. Filmt oder fotografiert es!', 80, null);
+  const c3 = await challenge(2, 'Lobpreis-Flashmob', 'Singt in der Mittagspause spontan einen Worship-Song – an einem Ort, wo man es nicht erwartet. Filmt oder fotografiert es!', 80, null);
+
+  // Ankündigungen: eine neue Challenge + das Quick-Event "Ping Pong Battle"
+  const admin = M.db.one("SELECT id FROM users WHERE role = 'admin'").id;
+  run(`INSERT INTO announcements (title, body, kind, link, pushed, created_by, created_at) VALUES (?, ?, 'challenge', ?, 1, ?, ?)`,
+    'Neue Challenge: Lobpreis-Flashmob', 'Singt in der Mittagspause spontan einen Worship-Song – an einem Ort, wo man es nicht erwartet.',
+    `#/challenges/${c3}`, admin, now - 3 * H);
+  const battle = new Date(now + 90 * 60_000);
+  battle.setMinutes(Math.ceil(battle.getMinutes() / 15) * 15, 0, 0);
+  run(`INSERT INTO announcements (title, body, kind, event_at, location, pushed, created_by, created_at) VALUES (?, ?, 'event', ?, ?, 1, ?, ?)`,
+    'Ping Pong Battle gegen ICF München 🏓',
+    'Spontanes Turnier: Wir fordern die Crew vom ICF München heraus! Jede Smallgroup schickt 2 Leute an den Tisch. Zuschauen und Anfeuern ausdrücklich erwünscht – für Siege gibt es Bonuspunkte.',
+    battle.getTime(), 'Foyer The Hall', admin, now - 10 * 60_000);
 
   // Einreichungen der Bot-Smallgroups mit generierten Bildern passend zur Challenge
   const submit = async (cid, title, scene, gid, uid, groupName, count, points, comment) => {
@@ -326,8 +338,7 @@ async function seed() {
   await submit(c2, 'Selfie mit einem Leiter', 'selfie', g2, noah, 'Davids Crew', 1, 50, '');
   await submit(c2, 'Selfie mit einem Leiter', 'selfie', g3, elia, 'Salz & Licht', 1, null, 'Mit Leiterin Anna 🙌');
 
-  // Fotos vom ICF-Youth-Team (Galerie + Startseite)
-  const admin = M.db.one("SELECT id FROM users WHERE role = 'admin'").id;
+  // Fotos vom ICF-Youth-Team (in der Galerie mit Namen "ICF Youth")
   const official = [
     ['smallgroup', 'Smallgroup-Time am Morgen ☕', 20 * H],
     ['opening', 'Camp-Opening in The Hall 🎉', 6 * H],

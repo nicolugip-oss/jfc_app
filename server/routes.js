@@ -11,6 +11,7 @@ import {
 } from './auth.js';
 import { verifyMail, resetMail, mailConfigured } from './mail.js';
 import { DEFAULT_CATEGORIES, DEFAULT_LETTERS } from './game.js';
+import { initPush, pushPublicKey, allowedEndpoint, sendPush } from './push.js';
 
 const bad = (m) => new HttpError(400, m);
 const now = () => Date.now();
@@ -129,9 +130,33 @@ async function sendVerification(req, user) {
   await verifyMail(user.username, user.display_name, `${appUrl(req)}/bestaetigen/${token}`);
 }
 
+// Zeit für Push-Texte, in Schweizer Zeit
+const fmtEvent = (ts) => new Date(ts).toLocaleString('de-CH', { timeZone: 'Europe/Zurich', weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+
 export function apiRouter({ io, game }) {
   const r = express.Router();
   const refresh = (topic) => io.emit('refresh', topic);
+  initPush();
+
+  // Ankündigung speichern, live an alle in der App melden und optional als Push verschicken
+  async function announce({ title, body = '', kind = 'info', eventAt = null, location = '', link = null, push = false, userId }) {
+    const id = run(`INSERT INTO announcements (title, body, kind, event_at, location, link, pushed, created_by, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, title, body, kind, eventAt, location, link, push ? 1 : 0, userId, now()).id;
+    refresh('announcements');
+    io.emit('announcement:new', { id, title, kind, userId });
+    let pushResult = null;
+    if (push) {
+      const icon = kind === 'event' ? '⚡ ' : kind === 'challenge' ? '📸 ' : '📢 ';
+      const details = [eventAt ? `🕒 ${fmtEvent(eventAt)}` : '', location ? `📍 ${location}` : ''].filter(Boolean).join('  ');
+      pushResult = await sendPush({
+        title: icon + title,
+        body: [details, body].filter(Boolean).join('\n').slice(0, 200),
+        url: link || '#/',
+        tag: `ann-${id}`,
+      }, { excludeUserId: userId });
+    }
+    return { id, push: pushResult };
+  }
   const moveSocketsToGroup = (userId, oldGroup, newGroup) => {
     if (oldGroup) io.in(`user:${userId}`).socketsLeave(`group:${oldGroup}`);
     if (newGroup) io.in(`user:${userId}`).socketsJoin(`group:${newGroup}`);
@@ -458,6 +483,36 @@ export function apiRouter({ io, game }) {
     res.json({ ok: true });
   });
 
+  // ---------- Ankündigungen ----------
+  r.get('/announcements', requireUser, (req, res) => {
+    const max = Math.min(50, Math.max(1, int(req.query.limit, 20)));
+    res.json({
+      items: all(`SELECT id, title, body, kind, event_at AS eventAt, location, link, pushed, created_at AS createdAt
+        FROM announcements ORDER BY created_at DESC, id DESC LIMIT ?`, max),
+      total: one('SELECT COUNT(*) AS n FROM announcements').n,
+    });
+  });
+
+  // ---------- Push-Benachrichtigungen ----------
+  r.get('/push/key', requireUser, (req, res) => res.json({ publicKey: pushPublicKey() }));
+  r.post('/push/subscribe', requireUser, (req, res) => {
+    const b = req.body || {};
+    const endpoint = String(b.endpoint || '');
+    const p256dh = String(b.keys?.p256dh || '');
+    const auth = String(b.keys?.auth || '');
+    if (!allowedEndpoint(endpoint) || !p256dh || !auth || endpoint.length > 1000 || p256dh.length > 200 || auth.length > 100) {
+      throw bad('Dieses Gerät kann keine Push-Benachrichtigungen empfangen');
+    }
+    run(`INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth, created_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(endpoint) DO UPDATE SET user_id = excluded.user_id, p256dh = excluded.p256dh, auth = excluded.auth`,
+      req.user.id, endpoint, p256dh, auth, now());
+    res.json({ ok: true });
+  });
+  r.post('/push/unsubscribe', requireUser, (req, res) => {
+    run('DELETE FROM push_subscriptions WHERE endpoint = ? AND user_id = ?', String(req.body?.endpoint || ''), req.user.id);
+    res.json({ ok: true });
+  });
+
   // ---------- Stadt Land Youth ----------
   r.post('/game/join', requireUser, (req, res) => { game.join(req.user); res.json({ ok: true }); });
 
@@ -474,18 +529,35 @@ export function apiRouter({ io, game }) {
     published: b.published === '0' || b.published === false ? 0 : 1,
   });
   const coverUpload = upload.fields([{ name: 'image', maxCount: 1 }, { name: 'thumb', maxCount: 1 }]);
-  a.post('/challenges', coverUpload, (req, res) => {
+  // Neue (sichtbare) Challenge auf Wunsch auf der Startseite ankündigen und/oder per Push melden
+  const announceChallenge = (req, id, f) => {
+    const wantAnnounce = req.body?.announce === '1';
+    const wantPush = req.body?.push === '1';
+    if (!f.published || (!wantAnnounce && !wantPush)) return null;
+    return announce({
+      title: `Neue Challenge: ${f.title}`,
+      body: f.description.replace(/\s+/g, ' ').slice(0, 160),
+      kind: 'challenge',
+      link: `#/challenges/${id}`,
+      push: wantPush,
+      userId: req.user.id,
+    });
+  };
+  a.post('/challenges', coverUpload, async (req, res) => {
+    let id;
+    let f;
     try {
-      const f = challengeFields(req.body || {});
+      f = challengeFields(req.body || {});
       const img = req.files?.image?.[0]?.filename ?? null;
       const thumb = img ? req.files?.thumb?.[0]?.filename ?? null : null;
-      const id = run(`INSERT INTO challenges (title, description, points, deadline, published, image, thumb, created_at)
+      id = run(`INSERT INTO challenges (title, description, points, deadline, published, image, thumb, created_at)
                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, f.title, f.description, f.points, f.deadline, f.published, img, thumb, now()).id;
       refresh('challenges');
-      res.json({ ok: true, id });
     } catch (e) { cleanupUploads(req); throw e; }
+    const ann = await announceChallenge(req, id, f);
+    res.json({ ok: true, id, push: ann?.push ?? null });
   });
-  a.put('/challenges/:id', coverUpload, (req, res) => {
+  a.put('/challenges/:id', coverUpload, async (req, res) => {
     try {
       const c = one('SELECT id, image, thumb FROM challenges WHERE id = ?', int(req.params.id));
       if (!c) throw new HttpError(404, 'Challenge nicht gefunden');
@@ -502,7 +574,8 @@ export function apiRouter({ io, game }) {
         f.title, f.description, f.points, f.deadline, f.published, image, thumb, c.id);
       refresh('challenges');
       refresh('gallery');
-      res.json({ ok: true });
+      const ann = await announceChallenge(req, c.id, f);
+      res.json({ ok: true, push: ann?.push ?? null });
     } catch (e) { cleanupUploads(req); throw e; }
   });
   a.delete('/challenges/:id', (req, res) => {
@@ -520,6 +593,30 @@ export function apiRouter({ io, game }) {
     refresh('points');
     refresh('gallery');
     res.json({ ok: true });
+  });
+
+  // Ankündigungen & Quick-Events
+  a.post('/announcements', async (req, res) => {
+    const b = req.body || {};
+    const kind = b.kind === 'event' ? 'event' : 'info';
+    const result = await announce({
+      title: text(b.title, { name: 'Titel', max: 100 }),
+      body: String(b.body || '').trim().slice(0, 1000),
+      kind,
+      eventAt: kind === 'event' ? parseDeadline(b.eventAt) : null,
+      location: kind === 'event' ? String(b.location || '').trim().slice(0, 80) : '',
+      push: b.push === true || b.push === '1',
+      userId: req.user.id,
+    });
+    res.json({ ok: true, ...result });
+  });
+  a.delete('/announcements/:id', (req, res) => {
+    run('DELETE FROM announcements WHERE id = ?', int(req.params.id));
+    refresh('announcements');
+    res.json({ ok: true });
+  });
+  a.get('/push/stats', (req, res) => {
+    res.json(one('SELECT COUNT(*) AS devices, COUNT(DISTINCT user_id) AS people FROM push_subscriptions'));
   });
 
   // Fotos vom ICF-Youth-Team (ohne Challenge) – erscheinen in der Galerie und auf der Startseite

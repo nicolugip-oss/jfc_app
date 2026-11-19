@@ -13,6 +13,35 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+// Push-Benachrichtigung anzeigen (Ankündigungen, Quick-Events, neue Challenges)
+self.addEventListener('push', (event) => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch { data = { body: event.data?.text() }; }
+  event.waitUntil(self.registration.showNotification(data.title || 'Jesus First Camp', {
+    body: data.body || '',
+    icon: 'icon-192.png',
+    badge: 'badge-96.png',
+    tag: data.tag,
+    data: { url: data.url || './' },
+  }));
+});
+
+// Antippen öffnet die App (bzw. holt sie nach vorne) an der richtigen Stelle
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const target = new URL(event.notification.data?.url || './', self.registration.scope).href;
+  event.waitUntil((async () => {
+    const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    const win = wins.find((w) => w.url.startsWith(self.registration.scope));
+    if (win) {
+      await win.focus();
+      if ('navigate' in win) await win.navigate(target).catch(() => {});
+      return;
+    }
+    await self.clients.openWindow(target);
+  })());
+});
+
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   const url = new URL(req.url);

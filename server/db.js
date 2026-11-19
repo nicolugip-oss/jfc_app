@@ -75,6 +75,26 @@ CREATE TABLE IF NOT EXISTS gallery_photos (   -- Fotos ohne Challenge: vom ICF Y
   caption TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS announcements (    -- Ankündigungen & Quick-Events auf der Startseite
+  id INTEGER PRIMARY KEY,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL DEFAULT '',
+  kind TEXT NOT NULL DEFAULT 'info',          -- info | event | challenge
+  event_at INTEGER,
+  location TEXT NOT NULL DEFAULT '',
+  link TEXT,                                  -- z.B. #/challenges/5
+  pushed INTEGER NOT NULL DEFAULT 0,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS push_subscriptions (   -- Geräte mit aktivierten Push-Benachrichtigungen
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  endpoint TEXT NOT NULL UNIQUE,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS points (
   id INTEGER PRIMARY KEY,
   group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,

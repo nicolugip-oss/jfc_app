@@ -26,8 +26,9 @@ Für das echte Camp, mit allen Handys live verbunden und mit Mails, braucht es d
 - **Smallgroup einladen:** Die Person, welche die Smallgroup erstellt hat, teilt einen **Einladungslink** (z.B. per WhatsApp). Wer den Link öffnet und sich registriert, landet direkt in der richtigen Gruppe. Den 5-stelligen Code kann man auch eintippen.
 - **Passwort vergessen:** Ein Link per Mail ist 2 Stunden gültig.
 - **Challenges** ansehen und **Fotos hochladen**. Die Fotos werden automatisch verkleinert, und es wird zusätzlich ein kleines Vorschaubild erstellt.
-- **Galerie** mit allen Fotos aller Smallgroups, filterbar nach Challenge. Ein Foto lässt sich gross anzeigen, und man kann durch die Fotos wischen.
-- **Schnappschüsse:** In der Galerie (oder auf der Startseite unter „Aus dem Camp“) kann man unter „Foto teilen“ auch Fotos ohne Challenge hochladen, mit Bildtext. Die eigenen kann man jederzeit wieder löschen.
+- **Ankündigungen** oben auf der Startseite: Quick-Events (z.B. „Ping Pong Battle gegen ICF München“ mit Zeit und Ort), News und neue Challenges.
+- **Push-Benachrichtigungen:** Mit „Aktivieren“ auf der Startseite einschalten, dann kommen Ankündigungen auch bei geschlossener App. Auf Android geht das direkt, auf dem iPhone ab iOS 16.4, wenn die App vorher zum Home-Bildschirm hinzugefügt wurde.
+- **Galerie:** ein Ort für alle Fotos aus dem Camp, neuste zuerst. Jedes Foto ist mit dem Namen der Smallgroup beschriftet (Fotos des Teams mit „ICF Youth“). Unter „Foto teilen“ lädt man Fotos mit Bildtext hoch, die eigenen kann man wieder löschen. Ein Foto lässt sich gross anzeigen, und man kann durch die Fotos wischen.
 - **Live:** Lädt jemand ein Foto hoch, sehen es alle anderen sofort. Sie bekommen einen Hinweis, und Galerie und Startseite aktualisieren sich von selbst.
 - **Rangliste** mit Aufschlüsselung nach Challenges, Spiel und Bonus
 - **Stadt Land Youth** live mitspielen. Alle aus der Smallgroup können gleichzeitig auf ihren Handys mittippen.
@@ -37,7 +38,8 @@ Für das echte Camp, mit allen Handys live verbunden und mit Mails, braucht es d
 - Einreichungen bewerten
 - **Bonuspunkte** an eine oder mehrere Smallgroups vergeben (z.B. für eine Zusatz-Challenge). Negative Punkte sind auch möglich.
 - Smallgroups verwalten: vorab erstellen, umbenennen, Leute verschieben, Passwort setzen, **Konten manuell freischalten** (falls eine Mail nicht ankommt)
-- **Fotos vom ICF Youth** in der Galerie hochladen (ohne Challenge, mit Bildtext). Sie erscheinen sofort bei allen gross auf der Startseite.
+- **Ankündigungen & Quick-Events** erstellen (Admin → Ankündigungen): Titel, Text, bei Quick-Events auch Zeit und Ort. Pro Ankündigung entscheidest du, ob eine **Push-Benachrichtigung** rausgeht. Beim Erstellen einer Challenge kannst du sie ebenfalls ankündigen und per Push melden.
+- Fotos in der Galerie teilen, sie erscheinen mit dem Namen „ICF Youth“.
 - **Jedes Foto löschen** (Challenge-Fotos, Schnappschüsse, ICF-Fotos): in der Galerie antippen und dann „Löschen“ wählen. Das Foto verschwindet sofort bei allen.
 - Rangliste verstecken, z.B. für die grosse Auflösung am Schluss
 - Stadt Land Youth steuern (siehe unten)
@@ -122,6 +124,7 @@ Damit die App nach einem Neustart des Servers automatisch wieder startet, brauch
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` | Zugang zum Mailserver. Port 587 = STARTTLS, Port 465 = SSL. |
 | `MAIL_FROM` | Absender, z.B. `Jesus First Camp <noreply@icf.church>` |
 | `EMAIL_VERIFICATION` | `off` = Konten sind ohne Mail-Bestätigung sofort aktiv (Notfall-Schalter) |
+| `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | Optional: eigene Schlüssel für Push. Ohne Angabe werden sie beim ersten Start erzeugt und in der Datenbank gespeichert. Push funktioniert nur über HTTPS. |
 | `REGISTRATION_CODE` | Optionaler Camp-Code, ohne den man sich nicht registrieren kann |
 | `DATA_DIR`, `PORT` | Datenordner (Standard `./data`) und Port (Standard `3000`) |
 
