@@ -4,6 +4,7 @@
 // Alle Daten bleiben auf diesem Gerät (IndexedDB). Zwei Bot-Smallgroups spielen mit.
 import { initStore, kvGet, kvSet, files, wipe } from './store.js';
 import { pickWord } from './words.js';
+import { coverFiles } from '../public/cover.js';
 
 // Einstellungen wie in der .env – im Demo ohne Mails
 globalThis.__DEMO_ENV = { EMAIL_VERIFICATION: 'off', ADMIN_USERNAME: 'admin', ADMIN_PASSWORD: 'admin', DATA_DIR: 'data' };
@@ -332,9 +333,15 @@ async function seed() {
   run('UPDATE groups SET created_by = ? WHERE id = ?', elia, g3);
 
   const challenge = async (n, title, description, points, deadline) => {
-    const img = await fakePhoto(n, title, 'Jesus First Camp');
+    // Titelbild im JFC-Stil – derselbe Generator wie im Admin-Formular
+    const cover = await coverFiles(title, n);
+    const id = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
+    const file = `${id()}.jpg`;
+    const thumb = `${id()}.jpg`;
+    files.put(file, cover.image);
+    files.put(thumb, cover.thumb);
     return run(`INSERT INTO challenges (title, description, points, deadline, published, image, thumb, created_at)
-      VALUES (?, ?, ?, ?, 1, ?, ?, ?)`, title, description, points, deadline, img.file, img.thumb, now - (10 - n) * H).id;
+      VALUES (?, ?, ?, ?, 1, ?, ?, ?)`, title, description, points, deadline, file, thumb, now - (10 - n) * H).id;
   };
   const c1 = await challenge(0, 'Human Pyramid', 'Baut als Smallgroup eine menschliche Pyramide – mit möglichst vielen Leuten.\n\nBonus: Ein Leiter ist mit drauf!', 100, null);
   const c2 = await challenge(1, 'Selfie mit einem Leiter', 'Macht ein Smallgroup-Selfie mit einer Person aus dem Leiterteam. Je kreativer, desto besser!', 50, now + 2 * 24 * H);

@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Server } from 'socket.io';
 import multer from 'multer';
-import { UPLOAD_DIR } from './db.js';
+import { UPLOAD_DIR, backupDatabase } from './db.js';
 import { authMiddleware, userFromCookieHeader, loadUser, ensureAdmin, HttpError } from './auth.js';
 import { apiRouter } from './routes.js';
 import { createGame } from './game.js';
@@ -97,4 +97,14 @@ io.on('connection', (socket) => {
 });
 
 game.resume();
+
+// Backup beim Start und danach alle 6 Stunden prüfen (eines pro Tag)
+const runBackup = () => {
+  try {
+    const file = backupDatabase();
+    if (file) console.log(`Backup erstellt: ${file}`);
+  } catch (e) { console.error('Backup fehlgeschlagen:', e.message); }
+};
+runBackup();
+setInterval(runBackup, 6 * 3_600_000).unref();
 server.listen(PORT, () => console.log(`Jesus First Camp App läuft auf http://localhost:${PORT}`));

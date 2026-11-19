@@ -267,6 +267,10 @@ function connectSocket() {
     if (!S.view?.onStopped && S.game?.joined) toast(`🛑 STOPP! ${p.by ? p.by + ' war am schnellsten' : 'Runde vorbei'}`);
   });
   S.socket.on('refresh', (topic) => S.view?.onRefresh?.(topic));
+  S.socket.on('photo:new', (p) => {
+    if (!p?.groupName || p.userId === S.me?.user.id) return;
+    toast(`📷 ${p.groupName}: ${p.count > 1 ? `${p.count} neue Fotos` : 'neues Foto'} bei «${p.challengeTitle}»`);
+  });
 }
 function disconnectSocket() {
   S.socket?.disconnect();
@@ -906,12 +910,52 @@ async function viewChallengeEdit(main, params) {
         <label class="field grow"><span>Punkte (max.)</span><input class="input" name="points" type="number" min="0" inputmode="numeric" value="${c.points}"></label>
         <label class="field grow"><span>Deadline (optional)</span><input class="input" name="deadline" type="datetime-local" value="${toLocalInput(c.deadline)}"></label>
       </div>
-      <label class="field"><span>Titelbild (optional)</span><input class="input" name="image" type="file" accept="image/*"></label>
-      ${c.image ? html`<label class="row small" style="margin:-4px 0 12px"><input type="checkbox" name="removeImage" value="1"> Aktuelles Bild entfernen</label>` : ''}
+      <div class="field"><span>Titelbild</span>
+        <div class="cover-preview"><img data-cover-img alt="Vorschau Titelbild"></div>
+        <div class="row" style="margin-top:8px">
+          <button type="button" class="btn sm" data-cover-auto>🎨 ${c.image ? 'Neu im JFC-Stil' : 'Andere Variante'}</button>
+          <label class="btn sm upload-btn">📷 Eigenes Bild<input type="file" accept="image/*" name="image"></label>
+        </div>
+        <p class="small muted" style="margin:6px 0 0" data-cover-hint></p>
+      </div>
       <label class="row" style="margin-bottom:16px"><input type="checkbox" name="published" ${c.published ? 'checked' : ''}> <span>Für alle sichtbar (sonst Entwurf)</span></label>
       <button class="btn primary block big">${editing ? 'Speichern' : 'Challenge erstellen'}</button>
     </form>
     ${editing ? html`<button class="btn danger block section" data-del>Challenge löschen</button>` : ''}`);
+
+  // Titelbild: automatisch im JFC-Stil (aus dem Titel), eigenes Foto oder bestehendes Bild behalten
+  const { coverFiles } = await import('./cover.js');
+  const titleInput = $('[name=title]', main);
+  const fileInput = $('[name=image]', main);
+  const preview = $('[data-cover-img]', main);
+  const hint = $('[data-cover-hint]', main);
+  const autoBtn = $('[data-cover-auto]', main);
+  let mode = c.image ? 'keep' : 'auto';
+  let variant = 0;
+  let previewUrl = null;
+  const showPreview = (src) => { if (previewUrl) URL.revokeObjectURL(previewUrl); previewUrl = src.startsWith('blob:') ? src : null; preview.src = src; };
+  async function renderAuto() {
+    const { image } = await coverFiles(titleInput.value || 'Neue Challenge', variant);
+    if (mode === 'auto') showPreview(URL.createObjectURL(image));
+  }
+  function updateHint() {
+    hint.textContent = mode === 'auto' ? 'Wird automatisch aus dem Titel erstellt. «Andere Variante» für ein anderes Design.'
+      : mode === 'file' ? 'Dein eigenes Bild wird verwendet.' : 'Aktuelles Titelbild bleibt.';
+    autoBtn.textContent = mode === 'auto' ? '🔄 Andere Variante' : '🎨 Im JFC-Stil erstellen';
+  }
+  if (mode === 'keep') preview.src = c.image; else renderAuto();
+  updateHint();
+  let typing;
+  titleInput.addEventListener('input', () => { if (mode === 'auto') { clearTimeout(typing); typing = setTimeout(renderAuto, 250); } });
+  autoBtn.onclick = () => { if (mode === 'auto') variant++; mode = 'auto'; fileInput.value = ''; updateHint(); renderAuto(); };
+  fileInput.onchange = () => {
+    const f = fileInput.files[0];
+    if (!f) return;
+    mode = 'file';
+    showPreview(URL.createObjectURL(f));
+    updateHint();
+  };
+
   $('#f', main).onsubmit = (e) => {
     e.preventDefault();
     const form = e.target;
@@ -924,11 +968,14 @@ async function viewChallengeEdit(main, params) {
       const dl = el.namedItem('deadline').value;
       fd.append('deadline', dl ? new Date(dl).toISOString() : '');
       fd.append('published', el.namedItem('published').checked ? '1' : '0');
-      if (el.namedItem('removeImage')?.checked) fd.append('removeImage', '1');
-      const img = el.namedItem('image').files[0];
-      if (img) {
+      const img = fileInput.files[0];
+      if (mode === 'file' && img) {
         fd.append('image', await shrinkImage(img, 1800));
         fd.append('thumb', await shrinkImage(img, 320, 0.75));
+      } else if (mode === 'auto') {
+        const cover = await coverFiles(el.namedItem('title').value, variant);
+        fd.append('image', cover.image);
+        fd.append('thumb', cover.thumb);
       }
       const res = await api(editing ? 'PUT' : 'POST', editing ? `/api/admin/challenges/${params.id}` : '/api/admin/challenges', fd);
       toast(editing ? 'Gespeichert ✔' : 'Challenge erstellt 🎉', 'ok');

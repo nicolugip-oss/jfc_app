@@ -1,0 +1,6 @@
+# Caddy: holt automatisch ein HTTPS-Zertifikat (Let's Encrypt) für DOMAIN aus der .env
+# und leitet alles an die App weiter (inkl. WebSockets für das Live-Spiel).
+{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy app:3000
+}

@@ -1,16 +1,39 @@
-# Start:   docker compose up -d --build
-# Logs:    docker compose logs -f
-# Update:  git pull && docker compose up -d --build
+# Jesus First Camp App – Betrieb auf dem eigenen Server
+#
+#   Start:    docker compose up -d --build
+#   Logs:     docker compose logs -f app
+#   Update:   git pull && docker compose up -d --build
+#
+# "app" ist die App, "caddy" sorgt für HTTPS (Ports 80/443).
+# Läuft auf dem Server schon ein anderer Webserver auf 80/443, nur die App starten:
+#   docker compose up -d --build app      → dann Reverse-Proxy auf 127.0.0.1:3000 einrichten (siehe README)
 services:
   app:
     build: .
     restart: unless-stopped
     env_file: .env
     ports:
-      # Nur lokal erreichbar – davor gehört ein Reverse-Proxy mit HTTPS (siehe README).
       - "127.0.0.1:3000:3000"
     volumes:
       - jfc-data:/data
 
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:?Bitte DOMAIN in der .env setzen}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
 volumes:
   jfc-data:
+  caddy-data:
+  caddy-config:

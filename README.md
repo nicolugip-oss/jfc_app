@@ -27,11 +27,12 @@ Für das echte Camp, mit allen Handys live verbunden und mit Mails, braucht es d
 - **Passwort vergessen:** Ein Link per Mail ist 2 Stunden gültig.
 - **Challenges** ansehen und **Fotos hochladen**. Die Fotos werden automatisch verkleinert, und es wird zusätzlich ein kleines Vorschaubild erstellt.
 - **Galerie** mit allen Fotos aller Smallgroups, filterbar nach Challenge. Ein Foto lässt sich gross anzeigen, und man kann durch die Fotos wischen.
+- **Live:** Lädt eine Smallgroup ein Foto hoch, sehen es alle anderen sofort. Sie bekommen einen Hinweis, und Galerie und Startseite aktualisieren sich von selbst.
 - **Rangliste** mit Aufschlüsselung nach Challenges, Spiel und Bonus
 - **Stadt Land Youth** live mitspielen. Alle aus der Smallgroup können gleichzeitig auf ihren Handys mittippen.
 
 **Für Admins** (ein gemeinsames Admin-Konto, mehrere Leute können gleichzeitig eingeloggt sein)
-- Challenges erstellen und bearbeiten: Titel, Beschreibung, Punkte, Titelbild, Deadline, Entwurf/sichtbar
+- Challenges erstellen und bearbeiten: Titel, Beschreibung, Punkte, Titelbild, Deadline, Entwurf/sichtbar. Das **Titelbild wird automatisch im JFC-Stil** aus dem Titel erzeugt (`public/cover.js`, mit mehreren Varianten). Ein eigenes Foto geht auch.
 - Einreichungen bewerten
 - **Bonuspunkte** an eine oder mehrere Smallgroups vergeben (z.B. für eine Zusatz-Challenge). Negative Punkte sind auch möglich.
 - Smallgroups verwalten: vorab erstellen, umbenennen, Leute verschieben, Passwort setzen, **Konten manuell freischalten** (falls eine Mail nicht ankommt)
@@ -49,24 +50,51 @@ Für das echte Camp, mit allen Handys live verbunden und mit Mails, braucht es d
 5. Sobald **eine Gruppe alles ausgefüllt hat und STOPP drückt, ist für alle Schluss**.
 6. Der Admin sieht alle Antworten mit einem **Punktevorschlag**: 20 = als einzige Gruppe, 10 = einzigartig, 5 = doppelt, 0 = leer oder falscher Buchstabe. Er kann jede Antwort per Tipp ändern und vergibt dann die Punkte.
 
+## Go-Live-Checkliste
+
+1. **Server:** ein Linux-Server (Ubuntu/Debian), auf dem die Ports 80 und 443 frei sind. Ein kleiner VPS reicht (1 CPU, 1–2 GB RAM). Für die Fotos sollten mindestens 10 GB frei sein.
+2. **Domain:** z.B. `jfc.icf-youth.ch`. Ein DNS-Eintrag (A-Record) muss auf die IP des Servers zeigen.
+3. **Mail:** Zugangsdaten für einen Mail-Account, über den die Bestätigungs-Mails rausgehen (SMTP-Server, Port, Benutzer, Passwort).
+4. **Installieren:** siehe unten, ein Befehl auf dem Server.
+5. **Test:** Admin-Login, eine Challenge erstellen, mit 2–3 Handys registrieren, ein Foto hochladen, eine Runde Stadt Land Youth spielen.
+6. **Challenges erfassen** im Admin-Bereich. Das Titelbild wird automatisch im JFC-Stil erzeugt, ein eigenes Foto geht auch.
+7. **Link verteilen:** Alle öffnen die Adresse und legen die App auf den Homescreen. Wer eine Smallgroup erstellt, schickt den anderen den Einladungslink.
+
 ## Auf dem eigenen Server betreiben
 
-### Variante A: Docker (empfohlen)
+### Variante A: Installationsskript (empfohlen)
+
+Auf dem Server:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nicolugip-oss/jfc_app/main/install.sh -o install.sh
+sudo bash install.sh
+```
+
+Das Skript macht Folgendes:
+- Es installiert Docker, falls es noch fehlt.
+- Es holt die App nach `/opt/jfc_app`.
+- Es fragt Domain, Admin-Passwort und Mail-Zugang ab und speichert sie in `/opt/jfc_app/.env`. Die Datei ist nur für root lesbar.
+- Es startet die App zusammen mit **Caddy**, das automatisch das HTTPS-Zertifikat holt.
+
+Erneut ausführen = Update auf die neuste Version, die Einstellungen bleiben dabei erhalten.
+
+### Variante B: Docker von Hand
 
 ```bash
 git clone https://github.com/nicolugip-oss/jfc_app.git
 cd jfc_app
-cp .env.example .env      # Werte ausfüllen (Admin-Passwort, APP_URL, SMTP)
+cp .env.example .env      # Werte ausfüllen (DOMAIN, Admin-Passwort, SMTP)
 docker compose up -d --build
 ```
 
-Die App läuft dann auf `127.0.0.1:3000`. Datenbank und Fotos liegen im Docker-Volume `jfc-data`.
-
-- Logs: `docker compose logs -f`
+- Logs: `docker compose logs -f app`
 - Update: `git pull && docker compose up -d --build`
-- Backup: `docker compose exec -T app tar czf - -C /data . > jfc-backup-$(date +%F).tgz`
+- Datenbank und Fotos liegen im Docker-Volume `jfc-data`.
 
-### Variante B: direkt mit Node.js (ab Version 22.13)
+Läuft auf dem Server schon ein anderer Webserver auf 80/443, startest du nur die App mit `docker compose up -d --build app`. Sie ist dann auf `127.0.0.1:3000` erreichbar, und du leitest sie über den bestehenden Webserver weiter. Bei nginx müssen WebSockets durchgelassen werden (`proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";`), sonst läuft Stadt Land Youth nicht live.
+
+### Variante C: direkt mit Node.js (ab Version 22.13)
 
 ```bash
 npm ci --omit=dev
@@ -74,19 +102,12 @@ cp .env.example .env      # Werte ausfüllen
 npm start
 ```
 
-Damit die App nach einem Neustart des Servers automatisch wieder startet, z.B. mit `systemd` oder `pm2`. Daten liegen in `./data` (oder `DATA_DIR`).
+Damit die App nach einem Neustart des Servers automatisch wieder startet, braucht es z.B. `systemd` oder `pm2`, dazu einen Reverse-Proxy mit HTTPS. Die Daten liegen in `./data` (oder `DATA_DIR`).
 
-### HTTPS (Pflicht)
+### Backups
 
-Vor die App gehört ein Reverse-Proxy mit HTTPS. Am einfachsten geht das mit **Caddy**, das die Zertifikate automatisch holt. Beispiel `Caddyfile`:
-
-```
-jfc.example.ch {
-    reverse_proxy 127.0.0.1:3000
-}
-```
-
-Mit nginx funktioniert es auch. Wichtig: WebSockets durchlassen (`proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";`), sonst läuft Stadt Land Youth nicht live.
+- Die App sichert die Datenbank **automatisch jeden Tag** nach `/data/backups/`. Die letzten 14 Tage bleiben erhalten.
+- Komplettes Backup inkl. aller Fotos: `docker compose exec -T app tar czf - -C /data . > jfc-backup-$(date +%F).tgz`
 
 ## Einstellungen (`.env`)
 
@@ -94,7 +115,8 @@ Mit nginx funktioniert es auch. Wichtig: WebSockets durchlassen (`proxy_set_head
 |---|---|
 | `ADMIN_PASSWORD` | Passwort fürs Admin-Konto. Beim Login ins Feld „E-Mail“ einfach `admin` eingeben. Wird das Passwort geändert, werden alle Admin-Geräte ausgeloggt. |
 | `ADMIN_USERNAME` | Login-Name des Admins (Standard `admin`) |
-| `APP_URL` | Öffentliche Adresse, z.B. `https://jfc.example.ch` (für die Links in den Mails) |
+| `DOMAIN` | Domain der App, z.B. `jfc.example.ch` (für HTTPS mit Caddy) |
+| `APP_URL` | Öffentliche Adresse, z.B. `https://jfc.example.ch` (für die Links in den Mails; Standard: `https://DOMAIN`) |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` | Zugang zum Mailserver. Port 587 = STARTTLS, Port 465 = SSL. |
 | `MAIL_FROM` | Absender, z.B. `Jesus First Camp <noreply@icf.church>` |
 | `EMAIL_VERIFICATION` | `off` = Konten sind ohne Mail-Bestätigung sofort aktiv (Notfall-Schalter) |

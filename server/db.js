@@ -147,6 +147,19 @@ export function tx(fn) {
   }
 }
 
+// Tägliches Backup der Datenbank nach DATA_DIR/backups (die letzten 14 Tage bleiben)
+export function backupDatabase() {
+  const dir = path.join(DATA_DIR, 'backups');
+  fs.mkdirSync(dir, { recursive: true });
+  const day = new Date().toISOString().slice(0, 10);
+  const file = path.join(dir, `app-${day}.db`);
+  if (fs.existsSync(file)) return null;
+  db.exec(`VACUUM INTO '${file.replace(/'/g, "''")}'`);
+  const old = fs.readdirSync(dir).filter((f) => /^app-\d{4}-\d{2}-\d{2}\.db$/.test(f)).sort().slice(0, -14);
+  old.forEach((f) => fs.rmSync(path.join(dir, f), { force: true }));
+  return file;
+}
+
 export function getSetting(key, fallback = null) {
   const row = one('SELECT value FROM settings WHERE key = ?', key);
   return row ? JSON.parse(row.value) : fallback;

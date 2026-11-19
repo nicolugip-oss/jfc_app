@@ -179,7 +179,8 @@ button.chip.on { background: var(--accent); color: var(--accent-ink); border-col
 /* ---------- Challenges & Galerie ---------- */
 .ch-list { display: grid; gap: 12px; }
 .ch-item { display: flex; gap: 14px; align-items: stretch; text-decoration: none; color: inherit; padding: 12px; }
-.ch-thumb { width: 78px; min-height: 78px; border-radius: 12px; background: var(--surface-2) center/cover no-repeat; flex: none; display: grid; place-items: center; font-size: 30px; }
+.ch-thumb { width: 124px; aspect-ratio: 16 / 9; align-self: center; border-radius: 10px; background: var(--surface-2) center/cover no-repeat; flex: none; display: grid; place-items: center; font-size: 30px; }
+@media (max-width: 360px) { .ch-thumb { width: 96px; } }
 .ch-item h3 { font-size: 15px; margin-bottom: 6px; }
 .ch-cover { width: 100%; aspect-ratio: 16/9; object-fit: cover; border-radius: var(--radius); margin-bottom: 14px; background: var(--surface-2); }
 .desc { white-space: pre-wrap; line-height: 1.55; }
@@ -333,3 +334,8 @@ details > summary::-webkit-details-marker { display: none; }
 .demo-chip { flex: none; border: 1px dashed rgba(255, 255, 255, .7); background: transparent; color: var(--text); font-size: 11px; font-weight: 800; letter-spacing: .08em; padding: 5px 9px; border-radius: 999px; cursor: pointer; }
 .demobar { background: rgba(255, 255, 255, .04); border: 1px dashed rgba(255, 255, 255, .4); border-radius: var(--radius); padding: 14px; }
 .demo-card { border-style: dashed; }
+
+/* Titelbild-Vorschau im Admin-Formular */
+.cover-preview { aspect-ratio: 16 / 9; border-radius: 12px; overflow: hidden; background: var(--surface-2); border: 1px solid var(--line); }
+.cover-preview img { width: 100%; height: 100%; object-fit: cover; }
+label.upload-btn { cursor: pointer; }

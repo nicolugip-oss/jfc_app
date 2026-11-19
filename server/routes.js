@@ -37,7 +37,7 @@ function password(v) {
   if (pw.length > 200) throw bad('Passwort ist zu lang');
   return pw;
 }
-const appUrl = (req) => (process.env.APP_URL || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
+const appUrl = (req) => (process.env.APP_URL || (process.env.DOMAIN ? `https://${process.env.DOMAIN}` : `${req.protocol}://${req.get('host')}`)).replace(/\/$/, '');
 
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 function newJoinCode() {
@@ -337,6 +337,10 @@ export function apiRouter({ io, game }) {
     }
     refresh('submissions');
     refresh('gallery');
+    // Live-Hinweis an alle: "Davids Crew hat ein neues Foto hochgeladen"
+    const info = one('SELECT g.name AS groupName, c.title AS challengeTitle FROM groups g, challenges c WHERE g.id = ? AND c.id = ?',
+      req.user.group_id, int(req.params.id));
+    io.emit('photo:new', { ...info, count: photos.length, userId: req.user.id });
     res.json({ ok: true });
   });
 
