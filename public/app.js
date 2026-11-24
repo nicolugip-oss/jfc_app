@@ -594,9 +594,9 @@ async function viewAnnouncementsAdmin(main) {
         <div class="seg"><button type="button" data-kind="event" class="${kind === 'event' ? 'on' : ''}">⚡ Quick-Event</button><button type="button" data-kind="info" class="${kind === 'info' ? 'on' : ''}">📢 Ankündigung</button></div>
         <label class="field"><span>Titel</span><input class="input" name="title" required maxlength="100" placeholder="${kind === 'event' ? 'z.B. Ping Pong Battle gegen ICF München' : 'z.B. Morgen-Programm startet 30 Min. später'}"></label>
         <label class="field"><span>Text (optional)</span><textarea class="input" name="body" maxlength="1000" rows="3" placeholder="Was, wer, was mitbringen …"></textarea></label>
-        ${kind === 'event' ? html`<div class="row">
-          <label class="field grow"><span>Wann</span><input class="input" name="eventAt" type="datetime-local" value="${toLocalInput(soon.getTime())}" required></label>
-          <label class="field grow"><span>Wo</span><input class="input" name="location" maxlength="80" placeholder="z.B. Foyer The Hall"></label></div>` : ''}
+        ${kind === 'event' ? html`<div class="two-col">
+          <label class="field"><span>Wann</span><input class="input" name="eventAt" type="datetime-local" value="${toLocalInput(soon.getTime())}" required></label>
+          <label class="field"><span>Wo</span><input class="input" name="location" maxlength="80" placeholder="z.B. Foyer The Hall"></label></div>` : ''}
         <label class="check" style="margin:4px 0 6px"><input type="checkbox" name="push" checked> <span>🔔 Push-Benachrichtigung an alle senden</span></label>
         <p class="small muted" style="margin:0 0 14px">${stats.devices ? `${plural(stats.devices, 'Gerät hat', 'Geräte haben')} Push aktiviert (${plural(stats.people, 'Person', 'Personen')}).` : 'Noch hat niemand Push aktiviert – die Ankündigung erscheint trotzdem bei allen in der App.'}</p>
         <button class="btn primary block big">Veröffentlichen</button>
@@ -717,8 +717,8 @@ async function syncPush() {
 
 async function viewHome(main) {
   async function load() {
-    const [me, lb, challenges, gallery, news, pushCard] = await Promise.all([refreshMe(), api('GET', '/api/leaderboard'), api('GET', '/api/challenges'),
-      api('GET', '/api/gallery?limit=6'), api('GET', '/api/announcements?limit=3'), pushPromptHtml()]);
+    const [me, lb, challenges, news, pushCard] = await Promise.all([refreshMe(), api('GET', '/api/leaderboard'), api('GET', '/api/challenges'),
+      api('GET', '/api/announcements?limit=3'), pushPromptHtml()]);
     if (!me) return go('/login');
     const g = me.group;
     const rankIdx = g ? lb.groups.findIndex((x) => x.id === g.id) : -1;
@@ -763,18 +763,8 @@ async function viewHome(main) {
           </div>
         </div>` : ''}
 
-      <div class="section">
-        <div class="row between" style="margin-bottom:10px"><h3 style="margin:0">📷 Aus dem Camp</h3>
-          ${isAdmin() ? html`<a href="#/galerie" class="small">Galerie →</a>` : html`<button class="btn sm" data-upload-snap>📸 Foto teilen</button>`}</div>
-        ${gallery.photos.length ? html`
-          <div class="photos strip-grid" data-lb>${gallery.photos.map(galleryTile)}</div>
-          <a href="#/galerie" class="small" style="display:inline-block;margin-top:8px">Alle Fotos in der Galerie →</a>`
-        : html`<div class="card empty" style="padding:22px">Noch keine Schnappschüsse – teile den ersten! 📸</div>`}
-      </div>
-
       <button class="btn ghost block section" data-logout>Ausloggen</button>`);
     $('[data-logout]', main)?.addEventListener('click', logout);
-    $$('[data-upload-snap]', main).forEach((b) => b.addEventListener('click', uploadModal));
     bindPushPrompt(main, () => load().catch(() => {}));
 
     $('[data-share]', main)?.addEventListener('click', () => shareCode(g));
@@ -796,7 +786,7 @@ async function viewHome(main) {
   }
   await load();
   return {
-    onRefresh: (t) => ['points', 'groups', 'challenges', 'gallery', 'announcements'].includes(t) && !$('.modal-bg') && load().catch(() => {}),
+    onRefresh: (t) => ['points', 'groups', 'challenges', 'submissions', 'announcements'].includes(t) && !$('.modal-bg') && load().catch(() => {}),
     onGame: () => { if (!!S.game?.game !== !!$('.live-banner', main)) load().catch(() => {}); },
   };
 }
@@ -1154,9 +1144,9 @@ async function viewChallengeEdit(main, params) {
     <form id="f" class="card">
       <label class="field"><span>Titel</span><input class="input" name="title" required maxlength="80" value="${c.title}" placeholder="z.B. Smallgroup-Selfie mit einem Leiter"></label>
       <label class="field"><span>Beschreibung / Infos</span><textarea class="input" name="description" maxlength="4000" placeholder="Was ist zu tun? Regeln, Tipps, Bibelvers …">${c.description}</textarea></label>
-      <div class="row">
-        <label class="field grow"><span>Punkte (max.)</span><input class="input" name="points" type="number" min="0" inputmode="numeric" value="${c.points}"></label>
-        <label class="field grow"><span>Deadline (optional)</span><input class="input" name="deadline" type="datetime-local" value="${toLocalInput(c.deadline)}"></label>
+      <div class="two-col">
+        <label class="field"><span>Punkte (max.)</span><input class="input" name="points" type="number" min="0" inputmode="numeric" value="${c.points}"></label>
+        <label class="field"><span>Deadline (optional)</span><input class="input" name="deadline" type="datetime-local" value="${toLocalInput(c.deadline)}"></label>
       </div>
       <div class="field"><span>Titelbild</span>
         <div class="cover-preview"><img data-cover-img alt="Vorschau Titelbild"></div>
@@ -1648,10 +1638,10 @@ async function viewGame(main) {
         <h3>Neues Spiel starten</h3>
         <label class="field"><span>Titel</span><input class="input" name="title" value="Stadt Land Youth" maxlength="60"></label>
         <label class="field"><span>Kategorien (eine pro Zeile)</span><textarea class="input" name="categories" rows="8">${d.categories.join('\n')}</textarea></label>
-        <div class="row">
-          <label class="field grow"><span>Zeitlimit pro Runde</span><select class="input" name="timeLimit">
+        <div class="two-col">
+          <label class="field"><span>Zeitlimit pro Runde</span><select class="input" name="timeLimit">
             <option value="0">Kein Limit (nur STOPP)</option><option value="60">1 Minute</option><option value="90">1:30</option><option value="120">2 Minuten</option><option value="180" selected>3 Minuten</option><option value="300">5 Minuten</option></select></label>
-          <label class="field grow"><span>Buchstaben</span><input class="input" name="letters" value="${d.letters}"></label>
+          <label class="field"><span>Buchstaben</span><input class="input" name="letters" value="${d.letters}"></label>
         </div>
         <p class="small muted">Das Zeitlimit ist nur ein Sicherheitsnetz – normalerweise stoppt die schnellste Smallgroup.</p>
         <button class="btn primary block big">Spiel eröffnen</button>

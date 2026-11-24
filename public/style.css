@@ -172,9 +172,6 @@ button.chip.on { background: var(--accent); color: var(--accent-ink); border-col
 .live-banner { display: flex; align-items: center; gap: 12px; text-decoration: none; }
 .live-banner .pulse { width: 12px; height: 12px; border-radius: 50%; background: var(--danger); box-shadow: 0 0 0 0 rgba(255, 77, 61, .6); animation: pulse 1.4s infinite; flex: none; }
 @keyframes pulse { 70% { box-shadow: 0 0 0 12px rgba(255, 77, 61, 0); } 100% { box-shadow: 0 0 0 0 rgba(255, 77, 61, 0); } }
-.strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
-.strip a { aspect-ratio: 1; border-radius: 10px; overflow: hidden; background: var(--surface-2); }
-.strip img { width: 100%; height: 100%; object-fit: cover; }
 
 /* ---------- Challenges & Galerie ---------- */
 .ch-list { display: grid; gap: 12px; }
@@ -356,9 +353,17 @@ label.upload-btn { cursor: pointer; }
 .ann-admin { margin-top: 8px; display: flex; gap: 8px; align-items: center; justify-content: space-between; }
 .push-card { display: flex; gap: 12px; align-items: flex-start; }
 .push-card .ic { font-size: 26px; line-height: 1; }
-.strip-grid { grid-template-columns: repeat(3, 1fr); }
-.strip-grid .photo .by { font-size: 10px; }
 
 /* Häkchen-Felder: Kästchen und Text immer nebeneinander */
 .check { display: flex; gap: 10px; align-items: center; flex-wrap: nowrap; cursor: pointer; }
 .check input[type=checkbox] { width: 20px; height: 20px; flex: none; margin: 0; accent-color: #fff; }
+
+/* Zwei Felder nebeneinander – auf dem Handy untereinander, damit nichts überlappt */
+.two-col { display: grid; grid-template-columns: 1fr; column-gap: 12px; }
+.two-col > .field { min-width: 0; }
+@media (min-width: 560px) { .two-col { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+/* iPhone: Datum/Zeit-Felder sonst breiter als ihr Platz */
+input[type=datetime-local].input, input[type=date].input, input[type=time].input {
+  -webkit-appearance: none; appearance: none; display: block; min-width: 0; max-width: 100%; text-align: left;
+}
+input[type=datetime-local].input::-webkit-date-and-time-value { text-align: left; }
