@@ -515,6 +515,8 @@ export function apiRouter({ io, game }) {
 
   // ---------- Stadt Land Youth ----------
   r.post('/game/join', requireUser, (req, res) => { game.join(req.user); res.json({ ok: true }); });
+  r.post('/game/seat', requireUser, (req, res) => { game.takeSeat(req.user); res.json({ ok: true }); });
+  r.post('/game/seat/release', requireUser, (req, res) => { game.releaseSeat(req.user); res.json({ ok: true }); });
 
   // ---------- Admin ----------
   const a = express.Router();
@@ -770,7 +772,22 @@ export function apiRouter({ io, game }) {
   });
 
   // Spielsteuerung
-  a.post('/game', (req, res) => { game.create(req.body || {}); res.json({ ok: true }); });
+  // Spiel eröffnen – auf Wunsch mit Push an alle ("tritt mit deiner Smallgroup bei")
+  a.post('/game', async (req, res) => {
+    const b = req.body || {};
+    const g = game.create(b);
+    let push = null;
+    if (b.push === true || b.push === '1' || b.push === 'on') {
+      const seats = g.maxPlayers ? ` Pro Smallgroup schreiben ${g.maxPlayers === 1 ? '1 Handy' : `${g.maxPlayers} Handys`} mit.` : '';
+      push = await sendPush({
+        title: `🔤 ${g.title} startet!`,
+        body: `Tritt jetzt mit deiner Smallgroup bei.${seats}`,
+        url: '#/spiel',
+        tag: 'game',
+      }, { excludeUserId: req.user.id });
+    }
+    res.json({ ok: true, push });
+  });
   a.post('/game/round', (req, res) => { game.startRound(); res.json({ ok: true }); });
   a.post('/game/stop', (req, res) => { game.forceStop(); res.json({ ok: true }); });
   a.post('/game/discard', (req, res) => { game.discardRound(); res.json({ ok: true }); });

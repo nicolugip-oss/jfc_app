@@ -56,6 +56,13 @@ export function createGame(io) {
     const categories = JSON.parse(g.categories);
     const groups = all(`SELECT gr.id, gr.name FROM game_groups gg JOIN groups gr ON gr.id = gg.group_id
                         WHERE gg.game_id = ? ORDER BY gg.joined_at`, g.id);
+    // Wer pro Smallgroup mitschreibt (Plätze)
+    const players = {};
+    for (const p of all(`SELECT gp.group_id, u.id, u.display_name AS name FROM game_players gp JOIN users u ON u.id = gp.user_id
+                         WHERE gp.game_id = ? ORDER BY gp.joined_at`, g.id)) {
+      (players[p.group_id] ||= []).push({ id: p.id, name: p.name });
+    }
+    groups.forEach((gr) => { gr.players = players[gr.id]?.length || 0; });
     const totalsRows = all(`SELECT a.group_id, SUM(a.points) AS total FROM answers a
                             JOIN rounds r ON r.id = a.round_id
                             WHERE r.game_id = ? AND r.phase = 'scored' GROUP BY a.group_id`, g.id);
@@ -63,8 +70,8 @@ export function createGame(io) {
     const usedLetters = all('SELECT letter FROM rounds WHERE game_id = ? ORDER BY no', g.id).map((r) => r.letter);
     const r = lastRound(g.id);
     const state = {
-      game: { id: g.id, title: g.title, categories, timeLimit: g.time_limit },
-      groups, totals, usedLetters, round: null, progress: null, reveal: null, _answers: {},
+      game: { id: g.id, title: g.title, categories, timeLimit: g.time_limit, maxPlayers: g.max_players },
+      groups, totals, usedLetters, round: null, progress: null, reveal: null, _answers: {}, _players: players,
     };
     if (!r) return state;
 
@@ -105,11 +112,19 @@ export function createGame(io) {
   }
 
   function stateFor(user, base) {
-    const { _answers, ...s } = base;
+    const { _answers, _players, ...s } = base;
     s.serverNow = now();
     s.isAdmin = user.role === 'admin';
     s.myGroupId = user.group_id;
     s.joined = !!(s.game && s.groups.some((g) => g.id === user.group_id));
+    if (s.game) {
+      // Plätze in der eigenen Smallgroup: wer schreibt mit, darf ich, ist noch etwas frei?
+      const max = s.game.maxPlayers;
+      s.myPlayers = _players?.[user.group_id] || [];
+      s.mySeat = s.myPlayers.some((p) => p.id === user.id);
+      s.seatsFree = max ? Math.max(0, max - s.myPlayers.length) : null;
+      s.canWrite = s.joined && !s.isAdmin && (!max || s.mySeat);
+    }
     if (s.game && s.round) {
       s.myAnswers = s.game.categories.map((_, i) => _answers?.[user.group_id]?.[i] || '');
     }
@@ -170,6 +185,9 @@ export function createGame(io) {
     const r = lastRound(g.id);
     if (!r || r.id !== roundId) throw bad('Diese Runde ist vorbei');
     if (!isJoined(g.id, user.group_id)) throw bad('Deine Smallgroup ist dem Spiel nicht beigetreten');
+    if (g.max_players && !hasSeat(g.id, user)) {
+      throw bad(`Für eure Smallgroup schreiben schon ${g.max_players === 1 ? 'eine Person' : `${g.max_players} Personen`} – du kannst live zuschauen und mithelfen 👀`);
+    }
     const phase = effectivePhase(r);
     const inGrace = allowGrace && phase === 'stopped' && now() - r.stopped_at < GRACE_MS;
     if (phase !== 'playing' && !inGrace) throw bad(phase === 'countdown' ? 'Noch nicht – Countdown läuft!' : 'STOPP – die Runde ist vorbei');
@@ -178,12 +196,29 @@ export function createGame(io) {
 
   const cleanAnswer = (v) => String(v ?? '').replace(/\s+/g, ' ').slice(0, 60);
 
+  const hasSeat = (gameId, user) =>
+    !!one('SELECT 1 FROM game_players WHERE game_id = ? AND user_id = ? AND group_id = ?', gameId, user.id, user.group_id);
+
+  // Platz zum Mitschreiben nehmen (sofern noch einer frei ist)
+  function takeSeat(g, user, { quiet = false } = {}) {
+    if (!g.max_players || hasSeat(g.id, user)) return true;
+    const taken = one('SELECT COUNT(*) AS n FROM game_players WHERE game_id = ? AND group_id = ?', g.id, user.group_id).n;
+    if (taken >= g.max_players) {
+      if (quiet) return false;
+      throw bad(`Für eure Smallgroup schreiben schon ${g.max_players === 1 ? 'eine Person' : `${g.max_players} Personen`}. Jemand muss zuerst seinen Platz freigeben.`);
+    }
+    // Falls die Person vorher in einer anderen Smallgroup mitschrieb
+    run('DELETE FROM game_players WHERE game_id = ? AND user_id = ?', g.id, user.id);
+    run('INSERT INTO game_players (game_id, user_id, group_id, joined_at) VALUES (?, ?, ?, ?)', g.id, user.id, user.group_id, now());
+    return true;
+  }
+
   return {
     broadcast,
     stateForUser: (user) => stateFor(user, baseState()),
     resume: schedule,
 
-    create({ title, categories, timeLimit, letters }) {
+    create({ title, categories, timeLimit, letters, maxPlayers }) {
       if (activeGame()) throw bad('Es läuft schon ein Spiel – beende es zuerst');
       const cats = (Array.isArray(categories) ? categories : String(categories || '').split('\n'))
         .map((c) => String(c).trim()).filter(Boolean).slice(0, 15);
@@ -191,16 +226,38 @@ export function createGame(io) {
       const L = [...new Set(String(letters || DEFAULT_LETTERS).toUpperCase().replace(/[^A-ZÄÖÜ]/g, ''))].join('');
       if (!L) throw bad('Mindestens einen Buchstaben angeben');
       const limit = Math.max(0, Math.min(1800, parseInt(timeLimit, 10) || 0));
-      run('INSERT INTO games (title, categories, time_limit, letters, created_at) VALUES (?, ?, ?, ?, ?)',
-        String(title || 'Stadt Land Youth').trim().slice(0, 60) || 'Stadt Land Youth', JSON.stringify(cats), limit, L, now());
+      const seats = Math.max(0, Math.min(20, parseInt(maxPlayers, 10) || 0)); // 0 = unbegrenzt
+      const name = String(title || 'Stadt Land Youth').trim().slice(0, 60) || 'Stadt Land Youth';
+      run('INSERT INTO games (title, categories, time_limit, letters, max_players, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        name, JSON.stringify(cats), limit, L, seats, now());
       broadcast();
+      return { title: name, maxPlayers: seats };
     },
 
+    // Smallgroup tritt bei – wer beitritt, schreibt auch gleich mit
     join(user) {
       const g = activeGame();
       if (!g) throw bad('Es läuft gerade kein Spiel');
       if (!user.group_id) throw bad('Du bist in keiner Smallgroup');
-      run('INSERT OR IGNORE INTO game_groups (game_id, group_id, joined_at) VALUES (?, ?, ?)', g.id, user.group_id, now());
+      tx(() => {
+        run('INSERT OR IGNORE INTO game_groups (game_id, group_id, joined_at) VALUES (?, ?, ?)', g.id, user.group_id, now());
+        takeSeat(g, user, { quiet: true });
+      });
+      broadcast();
+    },
+
+    takeSeat(user) {
+      const g = activeGame();
+      if (!g) throw bad('Es läuft gerade kein Spiel');
+      if (!isJoined(g.id, user.group_id)) throw bad('Deine Smallgroup ist noch nicht beigetreten');
+      tx(() => takeSeat(g, user));
+      broadcast();
+    },
+
+    releaseSeat(user) {
+      const g = activeGame();
+      if (!g) throw bad('Es läuft gerade kein Spiel');
+      run('DELETE FROM game_players WHERE game_id = ? AND user_id = ?', g.id, user.id);
       broadcast();
     },
 
@@ -208,6 +265,7 @@ export function createGame(io) {
       const g = activeGame();
       if (!g) throw bad('Es läuft gerade kein Spiel');
       run('DELETE FROM game_groups WHERE game_id = ? AND group_id = ?', g.id, groupId);
+      run('DELETE FROM game_players WHERE game_id = ? AND group_id = ?', g.id, groupId);
       broadcast();
     },
 

@@ -1405,6 +1405,22 @@ function tickStage(root, round) {
 }
 const fmtTimer = (ms) => { const s = Math.max(0, Math.ceil(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
 
+// Wer schreibt in meiner Smallgroup mit? (max. Handys pro Smallgroup, vom Admin festgelegt)
+function seatsHtml(s) {
+  if (!s?.game || s.isAdmin || !s.joined) return '';
+  const max = s.game.maxPlayers;
+  if (!max) return html`<p class="small muted" style="margin:0">✍️ Alle aus eurer Smallgroup können mitschreiben.</p>`;
+  const me = S.me?.user.id;
+  return html`
+    <div class="row between"><b>✍️ Schreiben für eure Smallgroup (${s.myPlayers.length}/${max})</b>
+      ${s.mySeat ? html`<button class="btn sm ghost" data-seat-release>Platz freigeben</button>`
+        : s.seatsFree ? html`<button class="btn sm primary" data-seat-take>Ich schreibe mit</button>` : ''}</div>
+    <div class="chips" style="margin-top:8px">${s.myPlayers.length
+      ? s.myPlayers.map((p) => html`<span class="chip ${p.id === me ? 'me' : ''}">${p.id === me ? `${p.name} (du)` : p.name}</span>`)
+      : html`<span class="small muted">Noch niemand – nimm einen Platz!</span>`}</div>
+    ${!s.mySeat && !s.seatsFree ? html`<p class="small muted" style="margin:8px 0 0">👀 Alle Plätze sind besetzt – du siehst das Antwortblatt live und hilfst mündlich mit. Wird ein Platz frei, kannst du übernehmen.</p>` : ''}`;
+}
+
 function progressHtml(s) {
   const total = s.game.categories.length;
   return html`<div class="progress">${s.groups.map((g) => {
@@ -1483,7 +1499,7 @@ async function viewGame(main) {
 
   function keyOf(s) {
     const r = s.round;
-    return [s.game?.id, r?.id, r?.phase, s.joined, s.myGroupId, s.isAdmin].join('|');
+    return [s.game?.id, r?.id, r?.phase, s.joined, s.myGroupId, s.isAdmin, s.canWrite].join('|');
   }
 
   function update(s) {
@@ -1504,7 +1520,13 @@ async function viewGame(main) {
   // ---------- Teile, die sich laufend ändern ----------
   function renderParts(s) {
     set($('[data-part=groupcount]', main), s.game ? `(${s.groups.length})` : '');
-    set($('[data-part=groups]', main), s.game ? (s.groups.length ? html`<div class="chips">${s.groups.map((g) => html`<span class="chip ${g.id === s.myGroupId ? 'me' : ''}">${g.name}${s.isAdmin ? html` <button class="btn sm ghost" style="min-height:20px;padding:0 4px" data-kick="${g.id}" title="Entfernen">✕</button>` : ''}</span>`)}</div>` : html`<p class="muted small" style="margin:0">Noch niemand dabei …</p>`) : '');
+    set($('[data-part=groups]', main), s.game ? (s.groups.length ? html`<div class="chips">${s.groups.map((g) => html`<span class="chip ${g.id === s.myGroupId ? 'me' : ''}">${g.name}${s.game.maxPlayers ? html` · ✍️${g.players}` : ''}${s.isAdmin ? html` <button class="btn sm ghost" style="min-height:20px;padding:0 4px" data-kick="${g.id}" title="Entfernen">✕</button>` : ''}</span>`)}</div>` : html`<p class="muted small" style="margin:0">Noch niemand dabei …</p>`) : '');
+    set($('[data-part=seats]', main), seatsHtml(s));
+    $('[data-seat-take]', main)?.addEventListener('click', (e) => busy(e.currentTarget, () => api('POST', '/api/game/seat')));
+    $('[data-seat-release]', main)?.addEventListener('click', (e) => {
+      if (s.round?.phase === 'playing' && !confirm('Platz freigeben? Du kannst dann nur noch zuschauen, jemand anderes kann übernehmen.')) return;
+      busy(e.currentTarget, () => api('POST', '/api/game/seat/release'));
+    });
     set($('[data-part=progress]', main), s.game && s.progress ? progressHtml(s) : '');
     set($('[data-part=totals]', main), s.game ? totalsHtml(s) : '');
     if (s.reveal) set($('[data-part=reveal]', main), s.isAdmin ? scoringHtml(s) : revealHtml(s));
@@ -1572,12 +1594,15 @@ async function viewGame(main) {
         <button class="btn primary block big" data-demo-game>Spiel gegen Bots starten</button></div>` : ''}
       <div class="card empty"><div class="big">🔤</div>Gerade läuft kein Spiel.<br>Sobald es losgeht, erscheint es hier – mit einem roten Punkt unten.</div>
       <div class="card section"><h3>So geht's</h3>
-        <p class="small muted" style="margin:0">1. Eine Person eurer Smallgroup tritt dem Spiel bei – dann seid ihr alle dabei.<br>2. Ein zufälliger Buchstabe erscheint, dann zählt es von 5 runter.<br>3. Füllt alle Kategorien aus – ihr könnt zusammen auf mehreren Handys tippen.<br>4. Die erste Gruppe, die fertig ist, drückt STOPP – dann ist für alle Schluss!</p></div>`;
+        <p class="small muted" style="margin:0">1. Eine Person eurer Smallgroup tritt dem Spiel bei – dann seid ihr alle dabei.<br>2. Pro Smallgroup schreiben bis zu 2 Handys mit (stellt der Admin ein), die anderen sehen das Antwortblatt live und helfen mündlich.<br>3. Ein zufälliger Buchstabe erscheint, dann zählt es von 5 runter – füllt alle Kategorien aus.<br>4. Die erste Gruppe, die fertig ist, drückt STOPP – dann ist für alle Schluss!</p></div>`;
 
     const head = html`<div class="game-head"><div><div class="small muted">${r ? `Runde ${r.no}` : 'Lobby'}${s.usedLetters?.length ? ` · gespielt: ${s.usedLetters.join(' ')}` : ''}</div><h1>${g.title}</h1></div>${g.timeLimit ? html`<span class="badge">⏱ ${fmtTimer(g.timeLimit * 1000)}</span>` : ''}</div>`;
     const joinBtn = !s.joined && !s.isAdmin
-      ? (s.myGroupId ? html`<button class="btn primary block big" data-join>✋ Mit meiner Smallgroup beitreten</button>` : html`<div class="card muted">Tritt zuerst auf der Home-Seite einer Smallgroup bei.</div>`)
+      ? (s.myGroupId ? html`<button class="btn primary block big" data-join>✋ Mit meiner Smallgroup beitreten</button>
+          ${g.maxPlayers ? html`<p class="small muted center" style="margin:8px 0 0">Du schreibst dann für eure Smallgroup mit (max. ${g.maxPlayers === 1 ? '1 Handy' : `${g.maxPlayers} Handys`} pro Smallgroup).</p>` : ''}`
+        : html`<div class="card muted">Tritt zuerst auf der Home-Seite einer Smallgroup bei.</div>`)
       : '';
+    const seatsCard = s.joined && !s.isAdmin ? html`<div class="card section" data-part="seats"></div>` : '';
     const groupsCard = html`<div class="card section"><h3>Dabei <span data-part="groupcount"></span></h3><div data-part="groups"></div></div>`;
     const phase = r?.phase;
 
@@ -1588,7 +1613,7 @@ async function viewGame(main) {
             <button class="btn primary block big" data-start>▶ Runde ${(r?.no || 0) + 1} starten</button>
             <div class="row"><button class="btn sm grow" data-finish>Spiel beenden</button>${r ? html`<button class="btn sm grow" data-discard>Letzte Runde verwerfen</button>` : ''}</div>
           </div>`
-          : s.joined ? html`<div class="card accent center"><b>Ihr seid dabei! ✅</b><div class="small muted">${r ? 'Nächste Runde startet gleich …' : 'Wartet, bis die Runde startet.'}</div></div>` : joinBtn}
+          : s.joined ? html`<div class="card accent center"><b>Ihr seid dabei! ✅</b><div class="small muted">${r ? 'Nächste Runde startet gleich …' : 'Wartet, bis die Runde startet.'}</div></div>${seatsCard}` : joinBtn}
         ${DEMO && !s.isAdmin && s.joined ? html`<div class="demobar section"><button class="btn primary block big" data-demo-round>▶ Demo: Runde ${(r?.no || 0) + 1} starten</button>
           <p class="small muted" style="margin:8px 0 0">Im Camp startet der Admin die Runden – für alle gleichzeitig.</p></div>` : ''}
         ${r ? html`<div class="card section"><h3>Resultat Runde ${r.no} · ${r.letter}</h3><div class="small muted" style="margin-bottom:10px">${stopperText(r)}</div><div data-part="reveal"></div></div>` : ''}
@@ -1610,13 +1635,26 @@ async function viewGame(main) {
           <div class="adminbar section row"><button class="btn danger grow" data-forcestop>⏹ Runde jetzt stoppen</button><button class="btn sm ghost" data-discard>Verwerfen</button></div>`;
       }
       if (!s.joined) return html`${head}<div class="playbar"><span class="l">${r.letter}</span><span>Runde läuft</span><span class="t" data-timer></span></div>${joinBtn}<div class="card section"><div data-part="progress"></div></div>`;
+      // Smallgroup ist dabei, aber alle Plätze besetzt → Antwortblatt live mitlesen
+      if (!s.canWrite) {
+        const writers = s.myPlayers.map((p) => p.name).join(' und ') || 'Deine Smallgroup';
+        return html`
+          <div class="playbar"><span class="l">${r.letter}</span><span><b>Live 👀</b><br><span class="small" data-filled></span></span><span class="t" data-timer></span></div>
+          <div class="notice" style="margin-bottom:12px">👀 <b>${writers}</b> ${s.myPlayers.length > 1 ? 'schreiben' : 'schreibt'} für eure Smallgroup – du siehst alles live und hilfst mündlich mit.</div>
+          <form class="answers readonly" autocomplete="off" onsubmit="return false">
+            ${g.categories.map((c, i) => html`<label class="ans"><span>${c}</span><input class="input ${answers[i]?.trim() ? 'filled' : ''}" data-idx="${i}" value="${answers[i] || ''}" disabled placeholder="…"></label>`)}
+          </form>
+          ${seatsCard}
+          <div class="card section"><h4>Die anderen</h4><div data-part="progress"></div></div>`;
+      }
       return html`
         <div class="playbar"><span class="l">${r.letter}</span><span><b>Los!</b><br><span class="small" data-filled></span></span><span class="t" data-timer></span></div>
         <form class="answers" autocomplete="off" onsubmit="return false">
           ${g.categories.map((c, i) => html`<label class="ans"><span>${c}</span><input class="input ${answers[i]?.trim() ? 'filled' : ''}" data-idx="${i}" value="${answers[i] || ''}" maxlength="60" autocomplete="off" autocorrect="off" spellcheck="false" autocapitalize="words" enterkeyhint="${i === g.categories.length - 1 ? 'done' : 'next'}" placeholder="${r.letter} …"></label>`)}
         </form>
         <button class="stop-btn" data-stop>STOPP! ✋</button>
-        <p class="small muted center" style="margin-top:10px">Erst wenn alle Felder ausgefüllt sind. Alle in deiner Smallgroup können mittippen.</p>
+        <p class="small muted center" style="margin-top:10px">Erst wenn alle Felder ausgefüllt sind. ${g.maxPlayers ? 'Wer für eure Smallgroup mitschreibt, sieht die Eingaben der anderen live.' : 'Alle in deiner Smallgroup können mittippen.'}</p>
+        ${seatsCard}
         <div class="card section"><h4>Die anderen</h4><div data-part="progress"></div></div>`;
     }
 
@@ -1643,7 +1681,13 @@ async function viewGame(main) {
             <option value="0">Kein Limit (nur STOPP)</option><option value="60">1 Minute</option><option value="90">1:30</option><option value="120">2 Minuten</option><option value="180" selected>3 Minuten</option><option value="300">5 Minuten</option></select></label>
           <label class="field"><span>Buchstaben</span><input class="input" name="letters" value="${d.letters}"></label>
         </div>
-        <p class="small muted">Das Zeitlimit ist nur ein Sicherheitsnetz – normalerweise stoppt die schnellste Smallgroup.</p>
+        <p class="small muted" style="margin-top:-4px">Das Zeitlimit ist nur ein Sicherheitsnetz – normalerweise stoppt die schnellste Smallgroup.</p>
+        <label class="field"><span>Handys pro Smallgroup, die mitschreiben</span><select class="input" name="maxPlayers">
+          <option value="1">1 Handy</option><option value="2" selected>2 Handys</option><option value="3">3 Handys</option><option value="4">4 Handys</option><option value="0">Unbegrenzt</option></select></label>
+        <p class="small muted" style="margin-top:-4px">Wer für die Smallgroup beitritt, schreibt mit. Die anderen sehen das Antwortblatt live und helfen mündlich.</p>
+        <div class="adminbar" style="margin-bottom:16px;padding:12px">
+          <label class="check"><input type="checkbox" name="push" checked> <span>🔔 Push-Benachrichtigung an alle: «Stadt Land Youth startet»</span></label>
+        </div>
         <button class="btn primary block big">Spiel eröffnen</button>
       </form>`;
   }
@@ -1652,13 +1696,18 @@ async function viewGame(main) {
     const cg = $('#cg', main);
     if (cg) cg.onsubmit = (e) => {
       e.preventDefault();
-      busy(e.submitter, () => api('POST', '/api/admin/game', Object.fromEntries(new FormData(cg))));
+      busy(e.submitter, async () => {
+        const data = Object.fromEntries(new FormData(cg));
+        data.push = cg.elements.namedItem('push').checked;
+        const res = await api('POST', '/api/admin/game', data);
+        toast(`Spiel eröffnet 🔤${pushInfo(res.push)}`, 'ok');
+      });
     };
     const on = (sel, fn) => { const el = $(sel, main); if (el) el.onclick = () => busy(el, fn); };
     on('[data-join]', () => api('POST', '/api/game/join'));
     on('[data-demo-game]', async () => {
       const d = S.config.defaults;
-      await S.demo.adminApi('POST', '/api/admin/game', { title: 'Stadt Land Youth', categories: d.categories.join('\n'), timeLimit: 180, letters: d.letters });
+      await S.demo.adminApi('POST', '/api/admin/game', { title: 'Stadt Land Youth', categories: d.categories.join('\n'), timeLimit: 180, letters: d.letters, maxPlayers: 2 });
       if (S.me.group) await api('POST', '/api/game/join');
     });
     on('[data-demo-round]', () => S.demo.adminApi('POST', '/api/admin/game/round'));

@@ -121,6 +121,13 @@ CREATE TABLE IF NOT EXISTS game_groups (
   joined_at INTEGER NOT NULL,
   PRIMARY KEY (game_id, group_id)
 );
+CREATE TABLE IF NOT EXISTS game_players (    -- wer pro Smallgroup mitschreiben darf (max. games.max_players)
+  game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+  joined_at INTEGER NOT NULL,
+  PRIMARY KEY (game_id, user_id)
+);
 CREATE TABLE IF NOT EXISTS rounds (
   id INTEGER PRIMARY KEY,
   game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
@@ -154,6 +161,7 @@ addColumn('photos', 'thumb', 'TEXT');
 addColumn('challenges', 'thumb', 'TEXT');
 addColumn('gallery_photos', 'official', 'INTEGER NOT NULL DEFAULT 1');
 addColumn('gallery_photos', 'group_id', 'INTEGER REFERENCES groups(id) ON DELETE SET NULL');
+addColumn('games', 'max_players', 'INTEGER NOT NULL DEFAULT 0'); // 0 = unbegrenzt
 db.exec("UPDATE users SET verified = 1 WHERE role = 'admin'");
 
 const num = (v) => (typeof v === 'bigint' ? Number(v) : v);

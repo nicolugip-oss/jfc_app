@@ -47,12 +47,16 @@ Für das echte Camp, mit allen Handys live verbunden und mit Mails, braucht es d
 
 ## Stadt Land Youth: Ablauf
 
-1. Der Admin eröffnet ein Spiel und legt Kategorien, ein optionales Zeitlimit und die Buchstaben fest.
-2. Die Smallgroups treten in der App bei. Eine Person reicht, dann ist die ganze Gruppe dabei.
-3. Der Admin startet die Runde. Auf allen Handys und auf dem Beamer **würfelt sich gleichzeitig ein Buchstabe aus**, dann zählt es **5 … 4 … 3 … 2 … 1** herunter.
-4. Die Gruppen füllen die Kategorien aus. Die Eingaben werden live zwischen den Handys derselben Gruppe synchronisiert.
-5. Sobald **eine Gruppe alles ausgefüllt hat und STOPP drückt, ist für alle Schluss**.
-6. Der Admin sieht alle Antworten mit einem **Punktevorschlag**: 20 = als einzige Gruppe, 10 = einzigartig, 5 = doppelt, 0 = leer oder falscher Buchstabe. Er kann jede Antwort per Tipp ändern und vergibt dann die Punkte.
+1. Der Admin eröffnet ein Spiel. Er legt fest:
+   - Kategorien, ein optionales Zeitlimit und die Buchstaben
+   - **wie viele Handys pro Smallgroup mitschreiben** (1–4 oder unbegrenzt, Standard 2)
+   - ob alle eine **Push-Nachricht** „Stadt Land Youth startet“ bekommen
+2. Alle sehen auf der Startseite „Stadt Land Youth läuft!“, und beim Spiel-Tab erscheint ein roter Punkt. Eine Person tritt für die Smallgroup bei, dann ist die ganze Gruppe dabei, und diese Person schreibt mit.
+3. Weitere Mitglieder nehmen mit „Ich schreibe mit“ einen freien Platz. Sind alle Plätze besetzt, sehen die anderen das Antwortblatt **live** (nicht bearbeitbar) und helfen mündlich. Wer seinen Platz freigibt, macht ihn für jemand anderen frei, auch mitten in der Runde. Der Server prüft die Grenze.
+4. Der Admin startet die Runde. Auf allen Handys und auf dem Beamer **würfelt sich gleichzeitig ein Buchstabe aus**, dann zählt es **5 … 4 … 3 … 2 … 1** herunter.
+5. Die Gruppen füllen die Kategorien aus. Die Eingaben werden live zwischen den Handys derselben Gruppe synchronisiert.
+6. Sobald **eine Gruppe alles ausgefüllt hat und STOPP drückt, ist für alle Schluss**.
+7. Der Admin sieht alle Antworten mit einem **Punktevorschlag**: 20 = als einzige Gruppe, 10 = einzigartig, 5 = doppelt, 0 = leer oder falscher Buchstabe. Er kann jede Antwort per Tipp ändern und vergibt dann die Punkte.
 
 ## Go-Live-Checkliste
 
